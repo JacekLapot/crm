@@ -261,6 +261,35 @@ with tab1:
                             except sqlite3.IntegrityError:
                                 st.error("Klient o takiej nazwie już istnieje!")
 
+                import streamlit as st
+import sqlite3
+
+# ... (kod połączenia z bazą) ...
+
+st.subheader("Lista klientów")
+
+# Pobranie klientów z bazy
+conn = sqlite3.connect('baza.db')
+cursor = conn.cursor()
+cursor.execute("SELECT id, imie, nazwisko FROM klienci")
+klienci = cursor.fetchall()
+
+for klient_id, imie, nazwisko in klienci:
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        st.write(f"**{imie} {nazwisko}**")
+        
+    with col2:
+        # Ważne: unikalny 'key' dla każdego przycisku!
+        if st.button("🗑️ Usuń", key=f"delete_{klient_id}"):
+            cursor.execute("DELETE FROM klienci WHERE id = ?", (klient_id,))
+            conn.commit()
+            st.success(f"Usunięto klienta: {imie} {nazwisko}")
+            st.rerun()  # Odświeża stronę po usunięciu
+
+conn.close()
+
                 st.markdown("---")
                 st.markdown("📈 **Statystyki zakupy/zwroty:**")
 
