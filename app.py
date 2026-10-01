@@ -467,11 +467,11 @@ with tab2:
                     else:
                         subject = f"Zamówienie: {selected_client} - {visit_date_str}"
                         body = (
-                            f"Hej,/n"
-                            f"proszę o wprowadzenie jak poniżej:/n/n"
+                            f"Hej,\n"
+                            f"proszę o wprowadzenie jak poniżej:\n\n"
                             f"{selected_client}\n:"
                             f"{order_text}\n\n\n"
-                            f"Dziękuję :)\n"                 
+                            f"Dziękuję :)\n\n\n"                 
                             f"Pozdrawiam\n"                    
                             f"Jacek Łapot"
                         )
