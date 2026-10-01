@@ -242,8 +242,20 @@ def render_client_card(row, key_prefix="card"):
     st.markdown("📞 **Dane kontaktowe:**")
     if row.get("chain_name"):
         st.write(f"• **Nazwa sieci:** {row['chain_name']}")
+    
+    # Wyświetlanie wielu numerów telefonów
     if row["phone"]:
-        st.write(f"• **Telefon:** [{row['phone']}](tel:{row['phone']})")
+        phone_entries = str(row["phone"]).split("\n")
+        for p_entry in phone_entries:
+            p_entry_str = p_entry.strip()
+            if p_entry_str:
+                if ":" in p_entry_str:
+                    owner_name, phone_num = p_entry_str.split(":", 1)
+                    phone_clean = phone_num.strip()
+                    st.write(f"• **{owner_name.strip()}:** [{phone_clean}](tel:{phone_clean})")
+                else:
+                    st.write(f"• **Telefon:** [{p_entry_str}](tel:{p_entry_str})")
+    
     if row["email"]:
         st.write(f"• **E-mail:** [{row['email']}](mailto:{row['email']})")
     if row["address"]:
@@ -262,7 +274,7 @@ def render_client_card(row, key_prefix="card"):
                 st.text(pl_res[0])
 
     # SEKCJA EDYCYJNA I USUWANIE
-    with st.popover("✏️ Edytuj / Usuń klienta", key=f"{key_prefix}_edit_{row['id']}"):
+    with st.popover("✏️️ Edytuj / Usuń klienta", key=f"{key_prefix}_edit_{row['id']}"):
         st.markdown(f"#### Edycja: {row['name']}")
         with st.form(key=f"{key_prefix}_edit_form_{row['id']}"):
             new_name = st.text_input("Nazwa klienta", value=row["name"])
@@ -272,7 +284,11 @@ def render_client_card(row, key_prefix="card"):
             cat_idx = cat_options.index(row["category"]) if row["category"] in cat_options else 0
             new_cat = st.selectbox("Priorytet", cat_options, index=cat_idx)
 
-            new_phone = st.text_input("Telefon", value=row["phone"] or "")
+            new_phone = st.text_area(
+                "Numery telefonów (Wpisz w osobnych liniach, np.\nJan (Właściciel): 600111222\nAnna (Kierownik): 600333444)", 
+                value=row["phone"] or "",
+                height=100
+            )
             new_email = st.text_input("E-mail", value=row["email"] or "")
             new_address = st.text_input("Adres", value=row["address"] or "")
 
@@ -381,7 +397,7 @@ def render_client_card(row, key_prefix="card"):
 
     # HISTORIA WIZYT
     st.markdown("---")
-    st.markdown("🗓️ **Historia wizyt i zamówień:**")
+    st.markdown("🗓️️ **Historia wizyt i zamówień:**")
 
     df_visits = pd.read_sql_query(
         "SELECT visit_date, notes, order_details, created_at FROM visits WHERE client_name = ? ORDER BY id DESC",
@@ -483,10 +499,11 @@ with tab1:
             sort_option = st.selectbox(
                 "Sortuj według:",
                 [
+                    "Nazwa klienta (A-Z)",
                     "Dni od wizyty (od najdawniejszych)",
                     "Dni od wizyty (od najnowszych)",
-                    "Nazwa klienta (A-Z)",
                 ],
+                index=0  # Domyślnie A-Z
             )
 
         filtered_df = df[df["category"].isin(category_filter)]
@@ -807,7 +824,11 @@ with tab4:
 
             st.markdown("---")
             st.markdown("📞 **Dane kontaktowe (opcjonalnie)**")
-            phone = st.text_input("Numer telefonu", placeholder="np. 600111222")
+            phone = st.text_area(
+                "Numery telefonów (Wpisz w osobnych liniach, np.\nJan (Właściciel): 600111222\nAnna (Kierownik): 600333444)",
+                placeholder="Jan (Właściciel): 600111222\nKierownik: 600333444",
+                height=100
+            )
             email = st.text_input("Adres e-mail", placeholder="np. sklep@klient.pl")
             address = st.text_input(
                 "Adres / Lokalizacja", placeholder="np. ul. Główna 5, Kielce"
