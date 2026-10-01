@@ -465,13 +465,13 @@ with tab2:
                             "Notatki zapisano, ale zamówienie NIE zostało wysłane – brak Hasła Aplikacji Gmail!"
                         )
                     else:
-                        subject = f"Zamówienie: {selected_client} - {visit_date_str}"
+                        subject = f"Zamówienie: {selected_client}"
                         body = (
                             f"Hej,\n"
                             f"proszę o wprowadzenie jak poniżej:\n\n"
-                            f"{selected_client}\n:"
+                            f"{selected_client}\n"
                             f"{order_text}\n\n\n"
-                            f"Dziękuję :)\n\n\n"                 
+                            f"Dziękuję :)\n\n\n\n"                 
                             f"Pozdrawiam\n"                    
                             f"Jacek Łapot"
                         )
