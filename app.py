@@ -406,18 +406,19 @@ def render_client_card(row, key_prefix="card"):
     else:
         st.caption("Brak danych o zakupach/zwrotach dla wybranego okresu.")
 
-    # HISTORIA WIZYT
+    # HISTORIA WIZYT Z OPCJĄ USUNIĘCIA
     st.markdown("---")
     st.markdown("🗓️ **Historia wizyt i zamówień:**")
 
     df_visits = pd.read_sql_query(
-        "SELECT visit_date, notes, order_details, created_at FROM visits WHERE client_name = ? ORDER BY id DESC",
+        "SELECT id, visit_date, notes, order_details, created_at FROM visits WHERE client_name = ? ORDER BY id DESC",
         conn,
         params=(row["name"],),
     )
 
     if not df_visits.empty:
-        for v_idx, v_row in df_visits.iterrows():
+        for _, v_row in df_visits.iterrows():
+            v_id = v_row["id"]
             v_date_str = v_row["visit_date"]
             with st.expander(f"📍 Wizyta: {v_date_str}"):
                 if v_row["notes"]:
@@ -434,6 +435,24 @@ def render_client_card(row, key_prefix="card"):
                 
                 if v_row["created_at"]:
                     st.caption(f"Zapisano: {v_row['created_at']}")
+
+                st.markdown("---")
+                # Usuwanie konkretnej wizyty
+                confirm_del_v = st.checkbox(f"Potwierdzam usunięcie wizyty z dnia {v_date_str}", key=f"{key_prefix}_conf_del_visit_{v_id}")
+                if st.button("🗑️ Usuń tę wizytę", key=f"{key_prefix}_del_visit_btn_{v_id}", type="primary"):
+                    if confirm_del_v:
+                        c.execute("DELETE FROM visits WHERE id = ?", (v_id,))
+                        
+                        # Aktualizacja ostatniej wizyty u klienta po usunięciu
+                        c.execute("SELECT MAX(visit_date) FROM visits WHERE client_name = ?", (row["name"],))
+                        new_last_v = c.fetchone()[0]
+                        c.execute("UPDATE clients SET last_visit = ? WHERE name = ?", (new_last_v, row["name"]))
+                        
+                        conn.commit()
+                        st.success("Pomyślnie usunięto wizytę!")
+                        st.rerun()
+                    else:
+                        st.warning("Zaznacz pole potwierdzenia, aby usunąć tę wizytę.")
     else:
         st.caption("Brak zarejestrowanych wizyt dla tego klienta.")
 
@@ -527,6 +546,32 @@ with tab1:
             filtered_df = filtered_df.sort_values(by="name", ascending=True)
 
         st.subheader("Lista Klientów")
+
+        # --- SEKCJA MASOWEGO USUWANIA ---
+        with st.expander("🗑️ Zarządzanie zaznaczonymi klientami (Masowe usuwanie)"):
+            st.caption("Zaznacz klientów poniżej, których chcesz trwale usunąć wraz z ich historią:")
+            clients_to_delete = []
+            for _, r_item in filtered_df.iterrows():
+                if st.checkbox(f"Zaznacz: {r_item['name']}", key=f"multi_del_{r_item['id']}"):
+                    clients_to_delete.append(r_item["name"])
+            
+            if clients_to_delete:
+                st.warning(f"Wybrano do usunięcia: {len(clients_to_delete)} klientów.")
+                confirm_bulk = st.checkbox("Potwierdzam trwale usunięcie zaznaczonych klientów")
+                if st.button("🗑️ Usuń zaznaczonych klientów", type="primary"):
+                    if confirm_bulk:
+                        for cl_del in clients_to_delete:
+                            c.execute("DELETE FROM clients WHERE name = ?", (cl_del,))
+                            c.execute("DELETE FROM purchases WHERE client_name = ?", (cl_del,))
+                            c.execute("DELETE FROM visits WHERE client_name = ?", (cl_del,))
+                            c.execute("DELETE FROM orders WHERE client_name = ?", (cl_del,))
+                        conn.commit()
+                        st.success("Pomyślnie usunięto zaznaczonych klientów!")
+                        st.rerun()
+                    else:
+                        st.error("Zaznacz pole potwierdzenia, aby wykonać masowe usuwanie.")
+
+        st.markdown("---")
 
         for _, row in filtered_df.iterrows():
             days_str = f"{row['Dni od wizyty']} dni" if row['Dni od wizyty'] != 999 else "Brak wizyt"
@@ -947,7 +992,7 @@ with tab4:
                             added_cnt += 1
 
                     conn.commit()
-                    st.success(f"Gotowe! Dodano {added_cnt} nowych kartotek, zaktualizowano {updated_cnt} iściejących.")
+                    st.success(f"Gotowe! Dodano {added_cnt} nowych kartotek, zaktualizowano {updated_cnt} istniejących.")
                     st.rerun()
 
             except Exception as ex:
