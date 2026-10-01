@@ -1,13 +1,3 @@
-[client]
-toolbarMode = "minimal"
-
-[browser]
-gatherUsageStats = false
-
-[theme]
-primaryColor = "#d35400"
-
-
 from datetime import datetime
 import email.mime.multipart
 import email.mime.text
