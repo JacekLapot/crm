@@ -23,7 +23,7 @@ if "authenticated" not in st.session_state:
 if not st.session_state["authenticated"]:
     st.title("🍞 Chlebownik")
     st.subheader("Dostęp zastrzeżony")
-    
+
     pin_input = st.text_input("Wprowadź kod dostępu (PIN):", type="password")
     if st.button("Zaloguj"):
         if pin_input == PIN_CRM:
@@ -45,6 +45,7 @@ c.execute(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL UNIQUE,
         category TEXT NOT NULL,
+        chain_name TEXT,
         phone TEXT,
         email TEXT,
         address TEXT,
@@ -104,6 +105,7 @@ conn.commit()
 
 # Łagodna migracja kolumn dla starych baz
 for column, col_type in [
+    ("chain_name", "TEXT"),
     ("phone", "TEXT"),
     ("email", "TEXT"),
     ("address", "TEXT"),
@@ -191,18 +193,21 @@ with tab1:
                 else ("🟡" if row["Dni od wizyty"] > 14 else "🟢")
             )
 
+            chain_str = f" [{row['chain_name']}]" if row.get("chain_name") else ""
             with st.expander(
-                f"{color} {row['name']} ({row['category']}) — {row['Dni od wizyty']} dni"
+                f"{color} {row['name']}{chain_str} ({row['category']}) — {row['Dni od wizyty']} dni"
             ):
                 # Dane kontaktowe
                 st.markdown("📞 **Dane kontaktowe:**")
+                if row.get("chain_name"):
+                    st.write(f"• **Nazwa sieci:** {row['chain_name']}")
                 if row["phone"]:
                     st.write(f"• **Telefon:** [{row['phone']}](tel:{row['phone']})")
                 if row["email"]:
                     st.write(f"• **E-mail:** [{row['email']}](mailto:{row['email']})")
                 if row["address"]:
                     st.write(f"• **Adres:** {row['address']}")
-                if not any([row["phone"], row["email"], row["address"]]):
+                if not any([row.get("chain_name"), row["phone"], row["email"], row["address"]]):
                     st.caption("Brak danych kontaktowych")
 
                 st.write(f"**Ostatnia wizyta:** {row['last_visit']}")
@@ -226,15 +231,16 @@ with tab1:
                     st.markdown(f"#### Edycja: {row['name']}")
                     with st.form(key=f"edit_form_{row['id']}"):
                         new_name = st.text_input("Nazwa klienta", value=row["name"])
-                        
+                        new_chain = st.text_input("Nazwa sieci", value=row.get("chain_name") or "")
+
                         cat_options = ["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"]
                         cat_idx = cat_options.index(row["category"]) if row["category"] in cat_options else 0
                         new_cat = st.selectbox("Priorytet", cat_options, index=cat_idx)
-                        
+
                         new_phone = st.text_input("Telefon", value=row["phone"] or "")
                         new_email = st.text_input("E-mail", value=row["email"] or "")
                         new_address = st.text_input("Adres", value=row["address"] or "")
-                        
+
                         current_pl = row["price_list"] if row["price_list"] in available_price_lists else "Brak"
                         pl_idx = available_price_lists.index(current_pl) if current_pl in available_price_lists else 0
                         new_pl = st.selectbox("Cennik", available_price_lists, index=pl_idx)
@@ -246,14 +252,14 @@ with tab1:
                                 if new_name != row["name"]:
                                     c.execute("UPDATE purchases SET client_name = ? WHERE client_name = ?", (new_name, row["name"]))
                                     c.execute("UPDATE orders SET client_name = ? WHERE client_name = ?", (new_name, row["name"]))
-                                
+
                                 c.execute(
                                     """
                                     UPDATE clients 
-                                    SET name = ?, category = ?, phone = ?, email = ?, address = ?, price_list = ?
+                                    SET name = ?, category = ?, chain_name = ?, phone = ?, email = ?, address = ?, price_list = ?
                                     WHERE id = ?
                                     """,
-                                    (new_name, new_cat, new_phone, new_email, new_address, new_pl if new_pl != "Brak" else None, row["id"])
+                                    (new_name, new_cat, new_chain, new_phone, new_email, new_address, new_pl if new_pl != "Brak" else None, row["id"])
                                 )
                                 conn.commit()
                                 st.success("Pomyślnie zaktualizowano dane klienta!")
@@ -552,12 +558,13 @@ with tab3:
 # --- TAB 4: DODAJ NOWEGO KLIENTA / IMPORT KLIENTÓW ---
 with tab4:
     st.subheader("👤 Zgłaszanie nowych klientów")
-    
+
     mode = st.radio("Wybierz sposób dodania:", ["Wpis ręczny (jeden klient)", "📥 Masowy import z pliku Excel"], horizontal=True)
 
     if mode == "Wpis ręczny (jeden klient)":
         with st.form("add_client_form", clear_on_submit=True):
             name = st.text_input("Nazwa firmy / Imię i nazwisko *")
+            chain_name = st.text_input("Nazwa sieci (opcjonalnie)", placeholder="np. Społem, Lewiatan, Biedronka")
             category = st.selectbox(
                 "Priorytet", ["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"]
             )
@@ -586,12 +593,13 @@ with tab4:
                 try:
                     c.execute(
                         """
-                        INSERT INTO clients (name, category, phone, email, address, price_list, last_visit, notes) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO clients (name, category, chain_name, phone, email, address, price_list, last_visit, notes) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             name,
                             category,
+                            chain_name,
                             phone,
                             email,
                             address,
@@ -624,10 +632,11 @@ with tab4:
                 col_x, col_y = st.columns(2)
                 with col_x:
                     col_name = st.selectbox("Nazwa Klienta / Firmy *", list(c_df.columns))
+                    col_chain = st.selectbox("Nazwa sieci", excel_cols)
                     col_cat = st.selectbox("Priorytet / Kategoria", excel_cols)
                     col_phone = st.selectbox("Numer telefonu", excel_cols)
-                    col_email = st.selectbox("E-mail", excel_cols)
                 with col_y:
+                    col_email = st.selectbox("E-mail", excel_cols)
                     col_addr = st.selectbox("Adres", excel_cols)
                     col_pl = st.selectbox("Cennik", excel_cols)
                     col_visit = st.selectbox("Data wizyty", excel_cols)
@@ -642,6 +651,8 @@ with tab4:
                         if not c_name or c_name == "nan":
                             continue
 
+                        c_chain = str(r[col_chain]).strip() if col_chain != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_chain]) else None
+
                         c_cat = str(r[col_cat]).strip() if col_cat != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_cat]) else "🥉 Brązowy"
                         if c_cat not in ["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"]:
                             c_cat = "🥉 Brązowy"
@@ -650,7 +661,7 @@ with tab4:
                         c_email = str(r[col_email]).strip() if col_email != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_email]) else None
                         c_addr = str(r[col_addr]).strip() if col_addr != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_addr]) else None
                         c_pl = str(r[col_pl]).strip() if col_pl != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_pl]) else None
-                        
+
                         v_date = str(r[col_visit]).split(" ")[0] if col_visit != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_visit]) else datetime.now().strftime("%Y-%m-%d")
                         c_notes = str(r[col_notes]).strip() if col_notes != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_notes]) else ""
 
@@ -662,27 +673,28 @@ with tab4:
                                 """
                                 UPDATE clients 
                                 SET category = COALESCE(?, category),
+                                    chain_name = COALESCE(?, chain_name),
                                     phone = COALESCE(?, phone),
                                     email = COALESCE(?, email),
                                     address = COALESCE(?, address),
                                     price_list = COALESCE(?, price_list)
                                 WHERE name = ?
                                 """,
-                                (c_cat, c_phone, c_email, c_addr, c_pl, c_name)
+                                (c_cat, c_chain, c_phone, c_email, c_addr, c_pl, c_name)
                             )
                             updated_cnt += 1
                         else:
                             c.execute(
                                 """
-                                INSERT INTO clients (name, category, phone, email, address, price_list, last_visit, notes)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                INSERT INTO clients (name, category, chain_name, phone, email, address, price_list, last_visit, notes)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                                 """,
-                                (c_name, c_cat, c_phone, c_email, c_addr, c_pl, v_date, c_notes)
+                                (c_name, c_cat, c_chain, c_phone, c_email, c_addr, c_pl, v_date, c_notes)
                             )
                             added_cnt += 1
 
                     conn.commit()
-                    st.success(f"Gotowe! Dodano {added_cnt} nowych kartotek, zaktualizowano {updated_cnt} iściejących.")
+                    st.success(f"Gotowe! Dodano {added_cnt} nowych kartotek, zaktualizowano {updated_cnt} istniejących.")
                     st.rerun()
 
             except Exception as ex:
