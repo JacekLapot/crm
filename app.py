@@ -545,33 +545,51 @@ with tab1:
         elif sort_option == "Nazwa klienta (A-Z)":
             filtered_df = filtered_df.sort_values(by="name", ascending=True)
 
-        st.subheader("Lista Klientów")
+        # Nagłówek listy klientów wraz z przyciskiem "Zaznacz wiele" po prawej u góry
+        col_hdr_title, col_hdr_btn = st.columns([2, 1])
+        with col_hdr_title:
+            st.subheader("Lista Klientów")
+        with col_hdr_btn:
+            multi_select_active = st.toggle("☑️ Zaznacz wiele", key="toggle_multi_select")
 
-        # --- SEKCJA MASOWEGO USUWANIA ---
-        with st.expander("🗑️ Zarządzanie zaznaczonymi klientami (Masowe usuwanie)"):
-            st.caption("Zaznacz klientów poniżej, których chcesz trwale usunąć wraz z ich historią:")
-            clients_to_delete = []
+        # Inicjalizacja stanu zaznaczenia
+        if "clients_to_delete" not in st.session_state:
+            st.session_state["clients_to_delete"] = []
+
+        clients_to_delete = []
+
+        if multi_select_active:
+            st.markdown("---")
+            # Kontener zarządzania masowego u góry, wyświetlający przycisk "Usuń" obok "Zaznacz wiele" w miarę potrzeb
+            col_info, col_del_action = st.columns([2, 1])
+            with col_info:
+                st.caption("Zaznacz wybrane pozycje na liście poniżej:")
+            
             for _, r_item in filtered_df.iterrows():
                 if st.checkbox(f"Zaznacz: {r_item['name']}", key=f"multi_del_{r_item['id']}"):
                     clients_to_delete.append(r_item["name"])
-            
+
             if clients_to_delete:
-                st.warning(f"Wybrano do usunięcia: {len(clients_to_delete)} klientów.")
-                confirm_bulk = st.checkbox("Potwierdzam trwale usunięcie zaznaczonych klientów")
-                if st.button("🗑️ Usuń zaznaczonych klientów", type="primary"):
-                    if confirm_bulk:
-                        for cl_del in clients_to_delete:
-                            c.execute("DELETE FROM clients WHERE name = ?", (cl_del,))
-                            c.execute("DELETE FROM purchases WHERE client_name = ?", (cl_del,))
-                            c.execute("DELETE FROM visits WHERE client_name = ?", (cl_del,))
-                            c.execute("DELETE FROM orders WHERE client_name = ?", (cl_del,))
-                        conn.commit()
-                        st.success("Pomyślnie usunięto zaznaczonych klientów!")
-                        st.rerun()
-                    else:
-                        st.error("Zaznacz pole potwierdzenia, aby wykonać masowe usuwanie.")
+                with col_del_action:
+                    confirm_bulk = st.checkbox("Potwierdź usunięcie", key="confirm_bulk_del")
+                    if st.button("🗑️ Usuń", type="primary", key="btn_bulk_del"):
+                        if confirm_bulk:
+                            for cl_del in clients_to_delete:
+                                c.execute("DELETE FROM clients WHERE name = ?", (cl_del,))
+                                c.execute("DELETE FROM purchases WHERE client_name = ?", (cl_del,))
+                                c.execute("DELETE FROM visits WHERE client_name = ?", (cl_del,))
+                                c.execute("DELETE FROM orders WHERE client_name = ?", (cl_del,))
+                            conn.commit()
+                            st.success("Pomyślnie usunięto zaznaczonych klientów!")
+                            st.rerun()
+                        else:
+                            st.error("Zaznacz pole potwierdzenia!")
 
         st.markdown("---")
+
+        # Zarządzanie stanem rozwijania tylko jednej kartoteki naraz
+        if "expanded_client_id" not in st.session_state:
+            st.session_state["expanded_client_id"] = None
 
         for _, row in filtered_df.iterrows():
             days_str = f"{row['Dni od wizyty']} dni" if row['Dni od wizyty'] != 999 else "Brak wizyt"
@@ -581,9 +599,16 @@ with tab1:
             )
 
             chain_str = f" [{row['chain_name']}]" if row.get("chain_name") else ""
-            with st.expander(
-                f"{color} {row['name']}{chain_str} ({row['category']}) — {days_str}"
-            ):
+            expander_title = f"{color} {row['name']}{chain_str} ({row['category']}) — {days_str}"
+            
+            is_expanded = st.session_state["expanded_client_id"] == row["id"]
+            
+            # Użycie parametru expanded w expanderze z zachowaniem logiki wzajemnego wykluczania
+            with st.expander(expander_title, expanded=is_expanded):
+                # Jeśli użytkownik rozwinął ten expander, ustawiamy go w stanie sesji jako jedyny aktywny
+                if st.session_state["expanded_client_id"] != row["id"]:
+                    st.session_state["expanded_client_id"] = row["id"]
+                
                 render_client_card(row, key_prefix="list")
 
     else:
