@@ -6,12 +6,33 @@ import sqlite3
 import pandas as pd
 import streamlit as st
 
+# --- USTAWIENIA HASŁA DOSTĘPU ---
+PIN_CRM = "1136"  # <-- ZMIEŃ TO HASŁO NA SWÓJ PRYWATNY PIN / KOD
+
 # --- KONFIGURACJA STRONY POD TELEFON ---
 st.set_page_config(
     page_title="CRM Wizyty, Zamówienia i Dane",
     page_icon="📱",
     layout="centered",
 )
+
+# --- MECHANIZM LOGOWANIA ---
+if "authenticated" not in st.session_state:
+    st.session_state["authenticated"] = False
+
+if not st.session_state["authenticated"]:
+    st.title("🔒 Prywatny CRM")
+    st.subheader("Dostęp zastrzeżony")
+    
+    pin_input = st.text_input("Wprowadź kod dostępu (PIN):", type="password")
+    if st.button("Zaloguj"):
+        if pin_input == PIN_CRM:
+            st.session_state["authenticated"] = True
+            st.success("Dostęp przyznany!")
+            st.rerun()
+        else:
+            st.error("Błędny kod dostępu!")
+    st.stop()  # Zatrzymuje wykonywanie reszty kodu, dopóki użytkownik się nie zaloguje
 
 # --- BAZA DANYCH ---
 conn = sqlite3.connect("crm.db", check_same_thread=False)
@@ -117,6 +138,13 @@ def send_email_via_gmail(
 
 
 st.title("📱 Mobilny CRM")
+
+# Przycisk wylogowania w panelu bocznym
+with st.sidebar:
+    st.write("👤 **Sesja aktywna**")
+    if st.button("🚪 Wyloguj"):
+        st.session_state["authenticated"] = False
+        st.rerun()
 
 # --- ZAKŁADKI ---
 tab1, tab2, tab3, tab4, tab5 = st.tabs(
@@ -525,7 +553,6 @@ with tab3:
 with tab4:
     st.subheader("👤 Zgłaszanie nowych klientów")
     
-    # Przełącznik między pojedynczym wpisem a plikiem Excel
     mode = st.radio("Wybierz sposób dodania:", ["Wpis ręczny (jeden klient)", "📥 Masowy import z pliku Excel"], horizontal=True)
 
     if mode == "Wpis ręczny (jeden klient)":
@@ -655,7 +682,7 @@ with tab4:
                             added_cnt += 1
 
                     conn.commit()
-                    st.success(f"Gotowe! Dodano {added_cnt} nowych kartotek, zaktualizowano {updated_cnt} istniejących.")
+                    st.success(f"Gotowe! Dodano {added_cnt} nowych kartotek, zaktualizowano {updated_cnt} iściejących.")
                     st.rerun()
 
             except Exception as ex:
