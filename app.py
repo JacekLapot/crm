@@ -479,7 +479,7 @@ def render_client_card(row, key_prefix="card"):
         st.caption("Brak zarejestrowanych wizyt dla tego klienta.")
 
 
-st.title("📱 Mobilny CRM")
+st.title("🍞 Chlebownik")
 
 # Przycisk wylogowania w panelu bocznym
 with st.sidebar:
@@ -494,7 +494,7 @@ available_price_lists = (
     ["Brak"] + price_lists_df["title"].tolist() if not price_lists_df.empty else ["Brak"]
 )
 
-# --- ZAKŁADKI (ZMODYFIKOWANA KOLEJNOŚĆ + WIZYTY) ---
+# --- ZAKŁADKI ---
 tab_home, tab_new_visit, tab_visits, tab_clients, tab_excel, tab_new_client, tab_pl = st.tabs(
     [
         "🏠 Strona główna",
@@ -507,7 +507,7 @@ tab_home, tab_new_visit, tab_visits, tab_clients, tab_excel, tab_new_client, tab
     ]
 )
 
-# --- TAB HOME: STRONA GŁÓWNA Z WYSZUKIWARKĄ ---
+# --- TAB HOME: STRONA GŁÓWNA Z WYSZUKIWARKĄ I ZŁOTYMI KLIENTAMI ---
 with tab_home:
     st.subheader("🔍 Wyszukaj Klienta")
     
@@ -530,6 +530,35 @@ with tab_home:
             st.info("💡 Wpisz nazwę klienta w polu powyżej, aby wywołać jego kartotekę.")
     else:
         st.info("Baza klientów jest pusta. Dodaj pierwszego klienta w zakładce 'Nowy klient'.")
+
+    # --- DODANA SEKCJA: ZŁOCI KLIENCI POSORTOWANI OD NAJDAWNIEJSZEJ WIZYTY ---
+    st.markdown("---")
+    st.subheader("🥇 Złoci Klienci (wymagający uwagi)")
+    st.caption("Posortowani od klientów u których wizyta była najdawniej:")
+
+    gold_df = all_clients_df[all_clients_df["category"] == "🥇 Złoty"].copy()
+
+    if not gold_df.empty:
+        gold_df["last_visit_clean"] = pd.to_datetime(gold_df["last_visit"], errors="coerce")
+        today = pd.to_datetime("today")
+        gold_df["Dni od wizyty"] = (today - gold_df["last_visit_clean"]).dt.days.fillna(999).astype(int)
+        
+        # Sortowanie od największej liczby dni od wizyty (najdawniej) do najmniejszej (oraz nierozstrzygnięte na końcu)
+        gold_df = gold_df.sort_values(by="Dni od wizyty", ascending=False)
+
+        for _, g_row in gold_df.iterrows():
+            g_days_str = f"{g_row['Dni od wizyty']} dni temu" if g_row['Dni od wizyty'] != 999 else "Brak wizyt"
+            g_color = "🔴" if g_row['Dni od wizyty'] > 30 else ("🟡" if g_row['Dni od wizyty'] > 14 else "🟢")
+            if g_row['Dni od wizyty'] == 999:
+                g_color = "⚪"
+
+            g_chain = f" [{g_row['chain_name']}]" if g_row.get("chain_name") else ""
+            g_title = f"{g_color} {g_row['name']}{g_chain} — Ostatnia wizyta: {g_row['last_visit'] if g_row['last_visit'] else 'Brak'} ({g_days_str})"
+
+            with st.expander(g_title):
+                render_client_card(g_row, key_prefix=f"gold_{g_row['id']}")
+    else:
+        st.info("Brak klientów w kategorii 🥇 Złoty.")
 
 # --- TAB 2: NOWA WIZYTA I ZAMÓWIENIE ---
 with tab_new_visit:
@@ -652,7 +681,6 @@ with tab_visits:
             v_client = v_row["client_name"]
             v_date = v_row["visit_date"]
             
-            # Lista rozwijalna z nazwą klienta i datą
             expander_title = f"📍 {v_client} — Data wizyty: {v_date}"
             
             with st.expander(expander_title):
@@ -669,7 +697,7 @@ with tab_visits:
                     st.caption("Brak złożonego zamówienia podczas tej wizyty.")
                 
                 if v_row["created_at"]:
-                    st.caption(f"Zapisano wsystemie: {v_row['created_at']}")
+                    st.caption(f"Zapisano w systemie: {v_row['created_at']}")
 
                 st.markdown("---")
                 confirm_del_v = st.checkbox(f"Potwierdzam usunięcie tej wizyty", key=f"tab_vis_conf_{v_id}")
@@ -677,7 +705,6 @@ with tab_visits:
                     if confirm_del_v:
                         c.execute("DELETE FROM visits WHERE id = ?", (v_id,))
                         
-                        # Aktualizacja ostatniej wizyty klienta
                         c.execute("SELECT MAX(visit_date) FROM visits WHERE client_name = ?", (v_client,))
                         new_last_v = c.fetchone()[0]
                         c.execute("UPDATE clients SET last_visit = ? WHERE name = ?", (new_last_v, v_client))
