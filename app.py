@@ -104,13 +104,14 @@ if not st.session_state["authenticated"]:
 conn = sqlite3.connect("crm.db", check_same_thread=False)
 c = conn.cursor()
 
-# Tabela klientów
+# Tabela klientów (z podziałem na kategorię główną i podgrupę, np. Nowy klient)
 c.execute(
     """
     CREATE TABLE IF NOT EXISTS clients (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL UNIQUE,
         category TEXT NOT NULL,
+        sub_category TEXT DEFAULT 'Standardowy',
         chain_name TEXT,
         phone TEXT,
         email TEXT,
@@ -217,6 +218,7 @@ conn.commit()
 
 # Migracja kolumn dla istniejących baz
 for column, col_type in [
+    ("sub_category", "TEXT DEFAULT 'Standardowy'"),
     ("chain_name", "TEXT"),
     ("phone", "TEXT"),
     ("email", "TEXT"),
@@ -296,7 +298,8 @@ def render_client_card(row, key_prefix="card"):
     )
 
     chain_str = f" [{row['chain_name']}]" if row.get("chain_name") else ""
-    st.markdown(f"### {color} {row['name']}{chain_str} ({row['category']})")
+    sub_cat_str = f" (Podgrupa: {row.get('sub_category', 'Standardowy')})" if row.get('sub_category') else ""
+    st.markdown(f"### {color} {row['name']}{chain_str} ({row['category']}){sub_cat_str}")
     st.caption(f"Ostatnia wizyta: {row['last_visit'] if row['last_visit'] else 'Brak'} ({days_str})")
 
     st.markdown("📞 **Dane kontaktowe i lokalizacja:**")
@@ -335,7 +338,7 @@ def render_client_card(row, key_prefix="card"):
         c.execute("SELECT details FROM price_lists WHERE title = ?", (row["price_list"],))
         pl_res = c.fetchone()
         if pl_res:
-            with st.popover("👁️ Pokaż cennik", key=f"{key_prefix}_pl_{row['id']}"):
+            with st.popover("👁️️ Pokaż cennik", key=f"{key_prefix}_pl_{row['id']}"):
                 st.caption(f"Cennik: {row['price_list']}")
                 st.text(pl_res[0])
 
@@ -348,6 +351,11 @@ def render_client_card(row, key_prefix="card"):
             cat_options = ["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"]
             cat_idx = cat_options.index(row["category"]) if row["category"] in cat_options else 0
             new_cat = st.selectbox("Priorytet / Scoring", cat_options, index=cat_idx)
+
+            sub_cat_options = ["Standardowy", "Nowy klient"]
+            current_sub = row.get("sub_category", "Standardowy")
+            sub_idx = sub_cat_options.index(current_sub) if current_sub in sub_cat_options else 0
+            new_sub_cat = st.selectbox("Podgrupa w Klienci", sub_cat_options, index=sub_idx)
 
             new_phone = st.text_area(
                 "Numery telefonów (Wpisz w osobnych liniach)", 
@@ -373,10 +381,10 @@ def render_client_card(row, key_prefix="card"):
                     c.execute(
                         """
                         UPDATE clients 
-                        SET name = ?, category = ?, chain_name = ?, phone = ?, email = ?, address = ?, price_list = ?
+                        SET name = ?, category = ?, sub_category = ?, chain_name = ?, phone = ?, email = ?, address = ?, price_list = ?
                         WHERE id = ?
                         """,
-                        (new_name, new_cat, new_chain, new_phone, new_email, new_address, new_pl if new_pl != "Brak" else None, row["id"])
+                        (new_name, new_cat, new_sub_cat, new_chain, new_phone, new_email, new_address, new_pl if new_pl != "Brak" else None, row["id"])
                     )
                     conn.commit()
                     st.success("Pomyślnie zaktualizowano dane klienta!")
@@ -500,7 +508,7 @@ def render_client_card(row, key_prefix="card"):
                         c.execute("UPDATE clients SET last_visit = ? WHERE name = ?", (new_last_v, row["name"]))
                         
                         conn.commit()
-                        st.success("Pomyślnie usunięto wizytę!")
+                        st.success("Pomyślnie usunięto wizyty!")
                         st.rerun()
                     else:
                         st.warning("Zaznacz pole potwierdzenia, aby usunąć tę wizytę.")
@@ -834,8 +842,9 @@ with tab_clients:
         gold_count = len(df[df["category"] == "🥇 Złoty"])
         silver_count = len(df[df["category"] == "🥈 Srebrny"])
         bronze_count = len(df[df["category"] == "🥉 Brązowy"])
+        new_cli_count = len(df[df["sub_category"] == "Nowy klient"])
 
-        st.markdown(f"👥 **Liczba klientów ogółem:** `{total_count}` | 🥇 Złote: `{gold_count}` | 🥈 Srebrne: `{silver_count}` | 🥉 Brązowe: `{bronze_count}`")
+        st.markdown(f"👥 **Ogółem:** `{total_count}` | 🥇 Złote: `{gold_count}` | 🥈 Srebrne: `{silver_count}` | 🥉 Brązowe: `{bronze_count}` | 🆕 Nowi klienci: `{new_cli_count}`")
         st.markdown("---")
 
         if st.button("🔄 Przelicz scoring klientów wg obrotów"):
@@ -847,12 +856,19 @@ with tab_clients:
         today = pd.to_datetime("today")
         df["Dni od wizyty"] = (today - df["last_visit_clean"]).dt.days.fillna(999).astype(int)
 
-        col_filter, col_sort = st.columns(2)
+        col_filter, col_sub_filter, col_sort = st.columns(3)
         with col_filter:
             category_filter = st.multiselect(
                 "Filtruj priorytet / scoring:",
                 ["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"],
                 default=["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"],
+            )
+
+        with col_sub_filter:
+            sub_category_filter = st.multiselect(
+                "Podgrupa kliencka:",
+                ["Standardowy", "Nowy klient"],
+                default=["Standardowy", "Nowy klient"],
             )
 
         with col_sort:
@@ -866,7 +882,7 @@ with tab_clients:
                 index=0
             )
 
-        filtered_df = df[df["category"].isin(category_filter)]
+        filtered_df = df[(df["category"].isin(category_filter)) & (df["sub_category"].isin(sub_category_filter))]
 
         if sort_option == "Dni od wizyty (od najdawniejszych)":
             filtered_df = filtered_df.sort_values(by="Dni od wizyty", ascending=False)
@@ -922,7 +938,8 @@ with tab_clients:
             )
 
             chain_str = f" [{row['chain_name']}]" if row.get("chain_name") else ""
-            expander_title = f"{color} {row['name']}{chain_str} ({row['category']}) — {days_str}"
+            sub_str = f" [Nowy]" if row.get("sub_category") == "Nowy klient" else ""
+            expander_title = f"{color} {row['name']}{chain_str}{sub_str} ({row['category']}) — {days_str}"
             
             with st.expander(expander_title):
                 render_client_card(row, key_prefix="list")
@@ -936,7 +953,7 @@ with tab_products:
     
     prod_mode = st.radio(
         "Wybierz tryb:",
-        ["Przeglądaj produkty", "Dodaj pojedynczy produkt", "📥 Masowy import z pliku Excel"],
+        ["Przeglądaj produkty", "Dodaj pojedynczy produkt", "📥 Masowy import z pliku Excel", "📈 Analiza sprzedaży (Top produkty)"],
         horizontal=True,
         key="prod_mode_radio"
     )
@@ -1025,7 +1042,7 @@ with tab_products:
                 except sqlite3.IntegrityError:
                     st.error("Produkt o takiej nazwie już istnieje w bazie!")
 
-    else:
+    elif prod_mode == "📥 Masowy import z pliku Excel":
         st.markdown("#### 📥 Masowy import produktów z pliku Excel")
         prod_file = st.file_uploader("Wybierz plik Excel z produktami (.xlsx lub .xls)", type=["xlsx", "xls"], key="excel_products_file")
 
@@ -1099,9 +1116,60 @@ with tab_products:
             except Exception as p_err:
                 st.error(f"Błąd podczas wczytywania pliku Excel: {p_err}")
 
+    else:
+        st.markdown("#### 📈 Analiza sprzedaży produktów w miesiącu")
+        st.caption("Zestawienie najlepiej sprzedających się artykułów na podstawie wgranych raportów ze sprzedaży:")
+
+        col_m_sel, col_y_sel = st.columns(2)
+        with col_m_sel:
+            anal_month = st.selectbox("Wybierz miesiąc", list(range(1, 13)), index=datetime.now().month - 1, format_func=lambda x: calendar.month_name[x], key="anal_m")
+        with col_y_sel:
+            anal_year = st.number_input("Rok", value=datetime.now().year, step=1, key="anal_y")
+
+        last_d_anal = calendar.monthrange(anal_year, anal_month)[1]
+        start_anal_str = f"{anal_year:04d}-{anal_month:02d}-01"
+        end_anal_str = f"{anal_year:04d}-{anal_month:02d}-{last_d_anal:02d}"
+
+        # Pobieramy zakupy w zadanym przedziale miesięcznym
+        query_anal = """
+            SELECT item_name, 
+                   SUM(bought_qty) as total_bought_qty, 
+                   SUM(bought_val) as total_bought_val,
+                   SUM(returned_qty) as total_returned_qty,
+                   SUM(returned_val) as total_returned_val,
+                   SUM(net_val) as total_net_val
+            FROM purchases 
+            WHERE report_start_date >= ? AND report_end_date <= ?
+            GROUP BY item_name
+            ORDER BY total_bought_qty DESC
+        """
+        df_anal = pd.read_sql_query(query_anal, conn, params=(start_anal_str, end_anal_str))
+
+        if not df_anal.empty:
+            st.success(f"Analiza dla okresu: **{start_anal_str}** do **{end_anal_str}**")
+            
+            df_anal_display = df_anal.rename(columns={
+                "item_name": "Produkt",
+                "total_bought_qty": "Zakupiona Ilość (Szt./Kg)",
+                "total_bought_val": "Wartość Zakupów (zł)",
+                "total_returned_qty": "Zwrócona Ilość",
+                "total_returned_val": "Wartość Zwrotów (zł)",
+                "total_net_val": "Wartość Netto (zł)"
+            })
+            
+            st.dataframe(df_anal_display, use_container_width=True)
+
+            st.markdown("---")
+            st.markdown("🏆 **Top 5 produktów (największa ilość):**")
+            top_5 = df_anal.head(5)
+            for idx, row in top_5.iterrows():
+                st.write(f"{idx+1}. **{row['item_name']}** — Zakupiono: **{row['total_bought_qty']:,.1f}** | Wartość netto: **{row['total_net_val']:,.2f} zł**")
+        else:
+            st.info(f"Brak danych sprzedażowych w bazie dla wybranego miesiąca ({calendar.month_name[anal_month]} {anal_year}). Wgraj raporty w zakładce 'Raport Excel'.")
+
 # --- TAB 6: IMPORT EXCELA ---
 with tab_excel:
-    st.subheader("📊 Wczytaj raport ze sprzedaży z Excela")
+    st.subheader("📊 Wczytaj raport ze sprzedaży z Excela (Miesiąc / Tydzień / Dzień)")
 
     report_type = st.radio(
         "Wybierz typ raportu:",
@@ -1133,7 +1201,7 @@ with tab_excel:
         st.info(f"Miesiąc: **{start_d}** do **{end_d}**")
 
     uploaded_file = st.file_uploader(
-        "Wybierz plik Excel (.xlsx lub .xls)", type=["xlsx", "xls"], key="excel_sales"
+        "Wybierz plik Excel ze sprzedaży (.xlsx lub .xls)", type=["xlsx", "xls"], key="excel_sales"
     )
 
     if uploaded_file is not None:
@@ -1155,11 +1223,12 @@ with tab_excel:
                 c_r_qty = st.selectbox("Ilość zwrócona", cols)
                 c_r_val = st.selectbox("Wartość zwrotów (zł)", cols)
 
-            if st.button("🚀 Przetwórz i przypisz do klientów"):
+            if st.button("🚀 Przetwórz i zaciągnij dane"):
                 if c_client == "-- Wybierz kolumnę --":
                     st.error("Musisz wskazać co najmniej kolumnę z Klientem!")
                 else:
                     processed_count = 0
+                    new_products_added = 0
 
                     for _, r in excel_df.iterrows():
                         client_name = str(r[c_client]).strip()
@@ -1167,8 +1236,8 @@ with tab_excel:
                             continue
 
                         item_name = (
-                            str(r[c_item])
-                            if c_item != "-- Wybierz kolumnę --"
+                            str(r[c_item]).strip()
+                            if c_item != "-- Wybierz kolumnę --" and pd.notnull(r[c_item])
                             else "Ogólne"
                         )
                         b_qty = (
@@ -1198,6 +1267,7 @@ with tab_excel:
 
                         net_item_val = b_val - r_val
 
+                        # 1. Zapis pozycji zakupowej / asortymentowej z pliku
                         c.execute(
                             """
                             INSERT INTO purchases (
@@ -1220,16 +1290,29 @@ with tab_excel:
                             ),
                         )
 
+                        # 2. Automatyczne wykrywanie i zaciąganie produktów do globalnego katalogu produktów
+                        if item_name and item_name != "Ogólne":
+                            c.execute("SELECT COUNT(*) FROM products WHERE name = ?", (item_name,))
+                            if c.fetchone()[0] == 0:
+                                unit_price = (b_val / b_qty) if b_qty > 0 else 0.0
+                                c.execute(
+                                    "INSERT INTO products (name, category, price) VALUES (?, ?, ?)",
+                                    (item_name, "Z raportu Excel", unit_price)
+                                )
+                                new_products_added += 1
+
+                        # 3. Sprawdzenie i automatyczne dodanie klienta (jako "Nowy klient" w podgrupie)
                         c.execute(
                             "SELECT COUNT(*) FROM clients WHERE name = ?",
                             (client_name,),
                         )
                         if c.fetchone()[0] == 0:
                             c.execute(
-                                "INSERT INTO clients (name, category) VALUES (?, ?)",
+                                "INSERT INTO clients (name, category, sub_category) VALUES (?, ?, ?)",
                                 (
                                     client_name,
                                     "🥉 Brązowy",
+                                    "Nowy klient",
                                 ),
                             )
 
@@ -1259,11 +1342,10 @@ with tab_excel:
                         )
 
                     conn.commit()
-                    
                     recalculate_client_scores()
 
                     st.success(
-                        f"Pomyślnie przetworzono {processed_count} pozycji z raportu oraz zaktualizowano scoring klientów!"
+                        f"Pomyślnie przetworzono {processed_count} pozycji, automatycznie zaciągnięto {new_products_added} nowych produktów do katalogu oraz zaktualizowano klientów!"
                     )
                     st.rerun()
 
@@ -1272,7 +1354,7 @@ with tab_excel:
 
 # --- TAB 7: DODAJ NOWEGO KLIENTA ---
 with tab_new_client:
-    st.subheader("👤 Zgłaszanie nowych klientów")
+    st.subheader("👤 Zgłaszanie nowych klientów (podgrupa w Klienci)")
 
     mode = st.radio("Wybierz sposób dodania:", ["Wpis ręczny (jeden klient)", "📥 Masowy import z pliku Excel"], horizontal=True)
 
@@ -1282,6 +1364,9 @@ with tab_new_client:
             chain_name = st.text_input("Nazwa sieci (opcjonalnie)", placeholder="np. Społem, Lewiatan, Biedronka")
             category = st.selectbox(
                 "Początkowa kategoria / Scoring", ["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"]
+            )
+            sub_category = st.selectbox(
+                "Podgrupa", ["Nowy klient", "Standardowy"]
             )
 
             st.markdown("---")
@@ -1306,12 +1391,13 @@ with tab_new_client:
                 try:
                     c.execute(
                         """
-                        INSERT INTO clients (name, category, chain_name, phone, email, address, price_list) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO clients (name, category, sub_category, chain_name, phone, email, address, price_list) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             name,
                             category,
+                            sub_category,
                             chain_name,
                             phone,
                             email,
@@ -1320,7 +1406,7 @@ with tab_new_client:
                         ),
                     )
                     conn.commit()
-                    st.success(f"Dodano klienta: {name}")
+                    st.success(f"Dodano klienta: {name} (Podgrupa: {sub_category})")
                     st.rerun()
                 except sqlite3.IntegrityError:
                     st.error("Klient o takiej nazwie już istnieje!")
@@ -1345,8 +1431,9 @@ with tab_new_client:
                     col_name = st.selectbox("Nazwa Klienta / Firmy *", list(c_df.columns))
                     col_chain = st.selectbox("Nazwa sieci", excel_cols)
                     col_cat = st.selectbox("Priorytet / Kategoria", excel_cols)
-                    col_phone = st.selectbox("Numer telefonu", excel_cols)
+                    col_sub = st.selectbox("Podgrupa (np. Nowy klient)", excel_cols)
                 with col_y:
+                    col_phone = st.selectbox("Numer telefonu", excel_cols)
                     col_email = st.selectbox("E-mail", excel_cols)
                     col_addr = st.selectbox("Adres", excel_cols)
                     col_pl = st.selectbox("Cennik", excel_cols)
@@ -1366,9 +1453,11 @@ with tab_new_client:
                         if c_cat not in ["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"]:
                             c_cat = "🥉 Brązowy"
 
+                        c_sub = str(r[col_sub]).strip() if col_sub != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_sub]) else "Nowy klient"
+
                         c_phone = str(r[col_phone]).strip() if col_phone != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_phone]) else None
                         c_email = str(r[col_email]).strip() if col_email != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_email]) else None
-                        c_addr = str(r[col_addr]).strip() if col_email != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_addr]) else None
+                        c_addr = str(r[col_addr]).strip() if col_addr != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_addr]) else None
                         c_pl = str(r[col_pl]).strip() if col_pl != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_pl]) else None
 
                         c.execute("SELECT COUNT(*) FROM clients WHERE name = ?", (c_name,))
@@ -1379,6 +1468,7 @@ with tab_new_client:
                                 """
                                 UPDATE clients 
                                 SET category = COALESCE(?, category),
+                                    sub_category = COALESCE(?, sub_category),
                                     chain_name = COALESCE(?, chain_name),
                                     phone = COALESCE(?, phone),
                                     email = COALESCE(?, email),
@@ -1386,16 +1476,16 @@ with tab_new_client:
                                     price_list = COALESCE(?, price_list)
                                 WHERE name = ?
                                 """,
-                                (c_cat, c_chain, c_phone, c_email, c_addr, c_pl, c_name)
+                                (c_cat, c_sub, c_chain, c_phone, c_email, c_addr, c_pl, c_name)
                             )
                             updated_cnt += 1
                         else:
                             c.execute(
                                 """
-                                INSERT INTO clients (name, category, chain_name, phone, email, address, price_list)
-                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                                INSERT INTO clients (name, category, sub_category, chain_name, phone, email, address, price_list)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                                 """,
-                                (c_name, c_cat, c_chain, c_phone, c_email, c_addr, c_pl)
+                                (c_name, c_cat, c_sub, c_chain, c_phone, c_email, c_addr, c_pl)
                             )
                             added_cnt += 1
 
