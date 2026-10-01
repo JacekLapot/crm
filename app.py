@@ -6,6 +6,7 @@ import smtplib
 import sqlite3
 import pandas as pd
 import streamlit as st
+import urllib.parse
 
 # --- USTAWIENIA HASŁA DOSTĘPU ---
 PIN_CRM = "1136"  # Kod dostępu
@@ -207,17 +208,6 @@ for column, col_type in [
     except sqlite3.OperationalError:
         pass
 
-for column, col_type in [
-    ("report_type", "TEXT DEFAULT 'Dzienny'"),
-    ("report_start_date", "DATE"),
-    ("report_end_date", "DATE"),
-]:
-    try:
-        c.execute(f"ALTER TABLE purchases ADD COLUMN {column} {col_type}")
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass
-
 
 def send_email_via_gmail(
     sender_email, app_password, recipient_email, subject, body_text
@@ -232,6 +222,39 @@ def send_email_via_gmail(
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(sender_email, app_password)
         server.send_message(msg)
+
+
+def recalculate_client_scores():
+    """Automatyczne przeliczanie scoringu klientów na podstawie zaksięgowanych zakupów netto"""
+    c.execute("SELECT name FROM clients")
+    all_clients = c.fetchall()
+    
+    for (cl_name,) in all_clients:
+        # Sumujemy wartość netto (zakupy minus zwroty) z ostatnich 30 dni lub ogółem
+        date_limit = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+        c.execute(
+            "SELECT SUM(net_val) FROM purchases WHERE client_name = ? AND report_date >= ?",
+            (cl_name, date_limit)
+        )
+        res = c.fetchone()[0]
+        monthly_val = res if res is not None else 0.0
+        
+        # Jeśli brak danych z ostatnich 30 dni, bierzemy ogólną średnią lub wartość z bazy
+        if monthly_val == 0.0:
+            c.execute("SELECT net_val FROM clients WHERE name = ?", (cl_name,))
+            r_net = c.fetchone()
+            monthly_val = r_net[0] if r_net and r_net[0] else 0.0
+
+        # Nowe progi scoringu
+        if monthly_val >= 7800.0:
+            new_cat = "🥇 Złoty"
+        elif monthly_val >= 3900.0:
+            new_cat = "🥈 Srebrny"
+        else:
+            new_cat = "🥉 Brązowy"
+            
+        c.execute("UPDATE clients SET category = ? WHERE name = ?", (new_cat, cl_name))
+    conn.commit()
 
 
 def render_client_card(row, key_prefix="card"):
@@ -250,8 +273,8 @@ def render_client_card(row, key_prefix="card"):
     st.markdown(f"### {color} {row['name']}{chain_str} ({row['category']})")
     st.caption(f"Ostatnia wizyta: {row['last_visit'] if row['last_visit'] else 'Brak'} ({days_str})")
 
-    # Dane kontaktowe
-    st.markdown("📞 **Dane kontaktowe:**")
+    # Dane kontaktowe i nawigacja
+    st.markdown("📞 **Dane kontaktowe i lokalizacja:**")
     if row.get("chain_name"):
         st.write(f"• **Nazwa sieci:** {row['chain_name']}")
     
@@ -269,8 +292,16 @@ def render_client_card(row, key_prefix="card"):
     
     if row["email"]:
         st.write(f"• **E-mail:** [{row['email']}](mailto:{row['email']})")
+    
     if row["address"]:
         st.write(f"• **Adres:** {row['address']}")
+        # Przycisk nawigacji (Geolokalizacja / Google Maps)
+        encoded_address = urllib.parse.quote(row['address'])
+        map_url = f"https://www.google.com/maps/search/?api=1&query={encoded_address}"
+        st.markdown(f"🚗 [Otwórz trasę w mapach Google]({map_url})", unsafe_allow_html=True)
+    else:
+        st.caption("Brak adresu (brak możliwości wyznaczenia trasy)")
+
     if not any([row.get("chain_name"), row["phone"], row["email"], row["address"]]):
         st.caption("Brak danych kontaktowych")
 
@@ -293,10 +324,10 @@ def render_client_card(row, key_prefix="card"):
 
             cat_options = ["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"]
             cat_idx = cat_options.index(row["category"]) if row["category"] in cat_options else 0
-            new_cat = st.selectbox("Priorytet", cat_options, index=cat_idx)
+            new_cat = st.selectbox("Priorytet / Scoring", cat_options, index=cat_idx)
 
             new_phone = st.text_area(
-                "Numery telefonów (Wpisz w osobnych liniach, np.\nJan (Właściciel): 600111222\nAnna (Kierownik): 600333444)", 
+                "Numery telefonów (Wpisz w osobnych liniach)", 
                 value=row["phone"] or "",
                 height=100
             )
@@ -437,13 +468,11 @@ def render_client_card(row, key_prefix="card"):
                     st.caption(f"Zapisano: {v_row['created_at']}")
 
                 st.markdown("---")
-                # Usuwanie konkretnej wizyty
                 confirm_del_v = st.checkbox(f"Potwierdzam usunięcie wizyty z dnia {v_date_str}", key=f"{key_prefix}_conf_del_visit_{v_id}")
                 if st.button("🗑️ Usuń tę wizytę", key=f"{key_prefix}_del_visit_btn_{v_id}", type="primary"):
                     if confirm_del_v:
                         c.execute("DELETE FROM visits WHERE id = ?", (v_id,))
                         
-                        # Aktualizacja ostatniej wizyty u klienta po usunięciu
                         c.execute("SELECT MAX(visit_date) FROM visits WHERE client_name = ?", (row["name"],))
                         new_last_v = c.fetchone()[0]
                         c.execute("UPDATE clients SET last_visit = ? WHERE name = ?", (new_last_v, row["name"]))
@@ -513,6 +542,12 @@ with tab1:
     df = pd.read_sql_query("SELECT * FROM clients", conn)
 
     if not df.empty:
+        # Przycisk automatycznego przeliczania scoringu (Złoty/Srebrny/Brązowy)
+        if st.button("🔄 Przelicz scoring klientów wg obrotów"):
+            recalculate_client_scores()
+            st.success("Zaktualizowano scoring klientów (Złoty: >=7800 zł, Srebrny: >=3900 zł, Brązowy: <3900 zł)")
+            st.rerun()
+
         df["last_visit_clean"] = pd.to_datetime(df["last_visit"], errors="coerce")
         today = pd.to_datetime("today")
         df["Dni od wizyty"] = (today - df["last_visit_clean"]).dt.days.fillna(999).astype(int)
@@ -520,7 +555,7 @@ with tab1:
         col_filter, col_sort = st.columns(2)
         with col_filter:
             category_filter = st.multiselect(
-                "Filtruj priorytet:",
+                "Filtruj priorytet / scoring:",
                 ["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"],
                 default=["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"],
             )
@@ -545,14 +580,12 @@ with tab1:
         elif sort_option == "Nazwa klienta (A-Z)":
             filtered_df = filtered_df.sort_values(by="name", ascending=True)
 
-        # Nagłówek listy klientów wraz z przyciskiem "Zaznacz wiele" po prawej u góry
         col_hdr_title, col_hdr_btn = st.columns([2, 1])
         with col_hdr_title:
             st.subheader("Lista Klientów")
         with col_hdr_btn:
             multi_select_active = st.toggle("☑️ Zaznacz wiele", key="toggle_multi_select")
 
-        # Inicjalizacja stanu zaznaczenia
         if "clients_to_delete" not in st.session_state:
             st.session_state["clients_to_delete"] = []
 
@@ -560,7 +593,6 @@ with tab1:
 
         if multi_select_active:
             st.markdown("---")
-            # Kontener zarządzania masowego u góry, wyświetlający przycisk "Usuń" obok "Zaznacz wiele" w miarę potrzeb
             col_info, col_del_action = st.columns([2, 1])
             with col_info:
                 st.caption("Zaznacz wybrane pozycje na liście poniżej:")
@@ -587,7 +619,6 @@ with tab1:
 
         st.markdown("---")
 
-        # Zarządzanie stanem rozwijania tylko jednej kartoteki naraz
         if "expanded_client_id" not in st.session_state:
             st.session_state["expanded_client_id"] = None
 
@@ -603,9 +634,7 @@ with tab1:
             
             is_expanded = st.session_state["expanded_client_id"] == row["id"]
             
-            # Użycie parametru expanded w expanderze z zachowaniem logiki wzajemnego wykluczania
             with st.expander(expander_title, expanded=is_expanded):
-                # Jeśli użytkownik rozwinął ten expander, ustawiamy go w stanie sesji jako jedyny aktywny
                 if st.session_state["expanded_client_id"] != row["id"]:
                     st.session_state["expanded_client_id"] = row["id"]
                 
@@ -879,8 +908,12 @@ with tab3:
                         )
 
                     conn.commit()
+                    
+                    # Automatyczne przeliczenie scoringu po wgraniu raportu
+                    recalculate_client_scores()
+
                     st.success(
-                        f"Pomyślnie przetworzono {processed_count} pozycji z raportu ({report_type.lower()})!"
+                        f"Pomyślnie przetworzono {processed_count} pozycji z raportu oraz zaktualizowano scoring klientów!"
                     )
                     st.rerun()
 
@@ -898,19 +931,19 @@ with tab4:
             name = st.text_input("Nazwa firmy / Imię i nazwisko *")
             chain_name = st.text_input("Nazwa sieci (opcjonalnie)", placeholder="np. Społem, Lewiatan, Biedronka")
             category = st.selectbox(
-                "Priorytet", ["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"]
+                "Początkowa kategoria / Scoring", ["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"]
             )
 
             st.markdown("---")
-            st.markdown("📞 **Dane kontaktowe (opcjonalnie)**")
+            st.markdown("📞 **Dane kontaktowe i lokalizacja (opcjonalnie)**")
             phone = st.text_area(
-                "Numery telefonów (Wpisz w osobnych liniach, np.\nJan (Właściciel): 600111222\nAnna (Kierownik): 600333444)",
+                "Numery telefonów (Wpisz w osobnych liniach)",
                 placeholder="Jan (Właściciel): 600111222\nKierownik: 600333444",
                 height=100
             )
             email = st.text_input("Adres e-mail", placeholder="np. sklep@klient.pl")
             address = st.text_input(
-                "Adres / Lokalizacja", placeholder="np. ul. Główna 5, Kielce"
+                "Adres / Lokalizacja (do nawigacji)", placeholder="np. ul. Sienkiewicza 10, Kielce"
             )
 
             st.markdown("---")
