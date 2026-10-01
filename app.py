@@ -18,7 +18,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# --- CUSTOM HEADER DLA APLIKACJI MOBILNEJ (PWA / EKRAN GŁÓWNY) ---
+# --- CUSTOM HEADER & CZARNA SZATA GRAFICZNA (DARK MODE CSS) ---
 st.markdown(
     """
     <head>
@@ -26,10 +26,59 @@ st.markdown(
         <meta name="apple-mobile-web-app-title" content="Chlebownik">
         <meta name="application-name" content="Chlebownik">
         <meta name="apple-mobile-web-app-capable" content="yes">
-        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+        <meta name="apple-mobile-web-app-status-bar-style" content="black">
+        <meta name="theme-color" content="#0e1117">
         <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍞</text></svg>">
         <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍞</text></svg>">
     </head>
+    <style>
+        /* Tło aplikacji i panelu bocznego */
+        .stApp, [data-testid="stSidebar"] {
+            background-color: #0e1117 !important;
+            color: #ffffff !important;
+        }
+
+        /* Nagłówki, teksty i etykiety */
+        h1, h2, h3, h4, h5, h6, p, label, span, div {
+            color: #e0e0e0 !important;
+        }
+
+        /* Karty expanderów, popoverów i formularzy */
+        .stExpander, [data-testid="stPopoverBody"], [data-testid="stForm"] {
+            background-color: #161b22 !important;
+            border: 1px solid #30363d !important;
+            border-radius: 8px !important;
+        }
+
+        /* Pola tekstowe i wyboru */
+        div[data-baseweb="input"], div[data-baseweb="select"], textarea {
+            background-color: #21262d !important;
+            color: #ffffff !important;
+            border-color: #30363d !important;
+        }
+
+        /* Przyciski */
+        button {
+            background-color: #21262d !important;
+            color: #ffffff !important;
+            border: 1px solid #30363d !important;
+        }
+
+        button:hover {
+            background-color: #30363d !important;
+            border-color: #8b949e !important;
+        }
+
+        /* Tabele Streamlit */
+        div[data-testid="stDataFrame"] {
+            background-color: #161b22 !important;
+        }
+
+        /* Wskaźniki st.metric */
+        div[data-testid="stMetricValue"] {
+            color: #58a6ff !important;
+        }
+    </style>
     """,
     unsafe_allow_html=True,
 )
@@ -173,7 +222,7 @@ def send_email_via_gmail(
         server.send_message(msg)
 
 
-st.title("📱 Mobilny CRM")
+st.title("🍞 Chlebownik")
 
 # Przycisk wylogowania w panelu bocznym
 with st.sidebar:
