@@ -18,11 +18,12 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# --- CUSTOM HEADER & CZARNA SZATA GRAFICZNA (DARK MODE CSS) ---
+# --- CUSTOM HEADER & MANIFEST PWA DLA TELEFONU ---
 st.markdown(
     """
     <head>
         <title>Chlebownik</title>
+        <link rel="manifest" href="manifest.json">
         <meta name="apple-mobile-web-app-title" content="Chlebownik">
         <meta name="application-name" content="Chlebownik">
         <meta name="apple-mobile-web-app-capable" content="yes">
@@ -243,7 +244,6 @@ def render_client_card(row, key_prefix="card"):
     if row.get("chain_name"):
         st.write(f"• **Nazwa sieci:** {row['chain_name']}")
     
-    # Wyświetlanie wielu numerów telefonów
     if row["phone"]:
         phone_entries = str(row["phone"]).split("\n")
         for p_entry in phone_entries:
@@ -274,7 +274,7 @@ def render_client_card(row, key_prefix="card"):
                 st.text(pl_res[0])
 
     # SEKCJA EDYCYJNA I USUWANIE
-    with st.popover("✏️️ Edytuj / Usuń klienta", key=f"{key_prefix}_edit_{row['id']}"):
+    with st.popover("✏️ Edytuj / Usuń klienta", key=f"{key_prefix}_edit_{row['id']}"):
         st.markdown(f"#### Edycja: {row['name']}")
         with st.form(key=f"{key_prefix}_edit_form_{row['id']}"):
             new_name = st.text_input("Nazwa klienta", value=row["name"])
@@ -397,7 +397,7 @@ def render_client_card(row, key_prefix="card"):
 
     # HISTORIA WIZYT
     st.markdown("---")
-    st.markdown("🗓️️ **Historia wizyt i zamówień:**")
+    st.markdown("🗓️ **Historia wizyt i zamówień:**")
 
     df_visits = pd.read_sql_query(
         "SELECT visit_date, notes, order_details, created_at FROM visits WHERE client_name = ? ORDER BY id DESC",
@@ -503,7 +503,7 @@ with tab1:
                     "Dni od wizyty (od najdawniejszych)",
                     "Dni od wizyty (od najnowszych)",
                 ],
-                index=0  # Domyślnie A-Z
+                index=0
             )
 
         filtered_df = df[df["category"].isin(category_filter)]
@@ -578,7 +578,6 @@ with tab2:
                 now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
                 visit_date_str = visit_date.strftime("%Y-%m-%d")
 
-                # Zapis wizyty do dedykowanej tabeli visits
                 c.execute(
                     """
                     INSERT INTO visits (client_name, visit_date, notes, order_details, created_at)
@@ -587,7 +586,6 @@ with tab2:
                     (selected_client, visit_date_str, private_notes if private_notes.strip() else None, order_text if order_text.strip() else None, now_str)
                 )
 
-                # Aktualizacja daty ostatniej wizyty u klienta
                 c.execute(
                     "UPDATE clients SET last_visit = ? WHERE name = ?",
                     (visit_date_str, selected_client),
@@ -640,7 +638,7 @@ with tab2:
     else:
         st.warning("Najpierw dodaj klienta w zakładce 'Nowy klient'!")
 
-# --- TAB 3: IMPORT EXCELA (RAPORTY DZIENNE, TYGODNIOWE, MIESIĘCZNE) ---
+# --- TAB 3: IMPORT EXCELA ---
 with tab3:
     st.subheader("📊 Wczytaj raport ze sprzedaży z Excela")
 
@@ -661,7 +659,7 @@ with tab3:
         st.info(f"Tydzień: **{monday.strftime('%Y-%m-%d')}** do **{sunday.strftime('%Y-%m-%d')}**")
         start_d = monday.strftime("%Y-%m-%d")
         end_d = sunday.strftime("%Y-%m-%d")
-    else: # Miesięczny
+    else:
         col_m, col_y = st.columns(2)
         with col_m:
             month_num = st.selectbox("Miesiąc", list(range(1, 13)), index=datetime.now().month - 1)
@@ -808,7 +806,7 @@ with tab3:
         except Exception as e:
             st.error(f"Błąd podczas odczytu pliku Excel: {e}")
 
-# --- TAB 4: DODAJ NOWEGO KLIENTA / IMPORT KLIENTÓW ---
+# --- TAB 4: DODAJ NOWEGO KLIENTA ---
 with tab4:
     st.subheader("👤 Zgłaszanie nowych klientów")
 
@@ -938,7 +936,7 @@ with tab4:
                             added_cnt += 1
 
                     conn.commit()
-                    st.success(f"Gotowe! Dodano {added_cnt} nowych kartotek, zaktualizowano {updated_cnt} iściejących.")
+                    st.success(f"Gotowe! Dodano {added_cnt} nowych kartotek, zaktualizowano {updated_cnt} istniejących.")
                     st.rerun()
 
             except Exception as ex:
