@@ -477,7 +477,7 @@ def render_client_card(row, key_prefix="card"):
 
                 st.markdown("---")
                 confirm_del_v = st.checkbox(f"Potwierdzam usunięcie wizyty z dnia {v_date_str}", key=f"{key_prefix}_conf_del_visit_{v_id}")
-                if st.button("🗑️️ Usuń tę wizytę", key=f"{key_prefix}_del_visit_btn_{v_id}", type="primary"):
+                if st.button("🗑️ Usuń tę wizytę", key=f"{key_prefix}_del_visit_btn_{v_id}", type="primary"):
                     if confirm_del_v:
                         c.execute("DELETE FROM visits WHERE id = ?", (v_id,))
                         
@@ -546,7 +546,7 @@ with tab_home:
     else:
         st.info("Baza klientów jest pusta. Dodaj pierwszego klienta w zakładce 'Nowy klient'.")
 
-    # --- SEKCJA: NOTATKI / ZADANIA (TO-DO) ---
+    # --- NOWA SEKCJA: NOTATKI / ZADANIA (TO-DO) ---
     st.markdown("---")
     st.subheader("📌 Zadania i Notatki (To-Do)")
 
@@ -912,18 +912,11 @@ with tab_clients:
             chain_str = f" [{row['chain_name']}]" if row.get("chain_name") else ""
             expander_title = f"{color} {row['name']}{chain_str} ({row['category']}) — {days_str}"
             
-            # Kluczowy mechanizm wymuszający zwijanie poprzedniego expandera
-            is_expanded = (st.session_state["expanded_client_id"] == row["id"])
+            is_expanded = st.session_state["expanded_client_id"] == row["id"]
             
-            expander_container = st.expander(expander_title, expanded=is_expanded)
-            
-            # Sprawdzamy stan za pomocą specyficznego hacka / przechwycenia
-            # W Streamlit stan expandera jest zwracany przez obiekt context managera (lub sprawdzany po kliknięciu)
-            # Najpewniejszą metodą w Streamlit na jednokrotne rozwijanie jest użycie callbacka lub zapisanie stanu w sesji
-            with expander_container:
+            with st.expander(expander_title, expanded=is_expanded):
                 if st.session_state["expanded_client_id"] != row["id"]:
                     st.session_state["expanded_client_id"] = row["id"]
-                    st.rerun()
                 
                 render_client_card(row, key_prefix="list")
 
