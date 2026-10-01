@@ -494,12 +494,13 @@ available_price_lists = (
     ["Brak"] + price_lists_df["title"].tolist() if not price_lists_df.empty else ["Brak"]
 )
 
-# --- ZAKŁADKI ---
-tab_home, tab1, tab2, tab3, tab4, tab5 = st.tabs(
+# --- ZAKŁADKI (ZMODYFIKOWANA KOLEJNOŚĆ + WIZYTY) ---
+tab_home, tab_new_visit, tab_visits, tab_clients, tab_excel, tab_new_client, tab_pl = st.tabs(
     [
         "🏠 Strona główna",
-        "📋 Klienci",
         "➕ Nowa wizyta",
+        "📋 Wizyty",
+        "👥 Klienci",
         "📊 Raport Excel",
         "👤 Nowy klient",
         "🏷️ Cenniki",
@@ -530,123 +531,8 @@ with tab_home:
     else:
         st.info("Baza klientów jest pusta. Dodaj pierwszego klienta w zakładce 'Nowy klient'.")
 
-# --- TAB 1: LISTA KLIENTÓW ---
-with tab1:
-    df = pd.read_sql_query("SELECT * FROM clients", conn)
-
-    if not df.empty:
-        # LICZNIK KLIENTÓW U GÓRY
-        total_count = len(df)
-        gold_count = len(df[df["category"] == "🥇 Złoty"])
-        silver_count = len(df[df["category"] == "🥈 Srebrny"])
-        bronze_count = len(df[df["category"] == "🥉 Brązowy"])
-
-        st.markdown(f"👥 **Liczba klientów ogółem:** `{total_count}` | 🥇 Złote: `{gold_count}` | 🥈 Srebrne: `{silver_count}` | 🥉 Brązowe: `{bronze_count}`")
-        st.markdown("---")
-
-        # Przycisk automatycznego przeliczania scoringu (Złoty/Srebrny/Brązowy)
-        if st.button("🔄 Przelicz scoring klientów wg obrotów"):
-            recalculate_client_scores()
-            st.success("Zaktualizowano scoring klientów (Złoty: >=7800 zł, Srebrny: >=3900 zł, Brązowy: <3900 zł)")
-            st.rerun()
-
-        df["last_visit_clean"] = pd.to_datetime(df["last_visit"], errors="coerce")
-        today = pd.to_datetime("today")
-        df["Dni od wizyty"] = (today - df["last_visit_clean"]).dt.days.fillna(999).astype(int)
-
-        col_filter, col_sort = st.columns(2)
-        with col_filter:
-            category_filter = st.multiselect(
-                "Filtruj priorytet / scoring:",
-                ["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"],
-                default=["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"],
-            )
-
-        with col_sort:
-            sort_option = st.selectbox(
-                "Sortuj według:",
-                [
-                    "Nazwa klienta (A-Z)",
-                    "Dni od wizyty (od najdawniejszych)",
-                    "Dni od wizyty (od najnowszych)",
-                ],
-                index=0
-            )
-
-        filtered_df = df[df["category"].isin(category_filter)]
-
-        if sort_option == "Dni od wizyty (od najdawniejszych)":
-            filtered_df = filtered_df.sort_values(by="Dni od wizyty", ascending=False)
-        elif sort_option == "Dni od wizyty (od najnowszych)":
-            filtered_df = filtered_df.sort_values(by="Dni od wizyty", ascending=True)
-        elif sort_option == "Nazwa klienta (A-Z)":
-            filtered_df = filtered_df.sort_values(by="name", ascending=True)
-
-        col_hdr_title, col_hdr_btn = st.columns([2, 1])
-        with col_hdr_title:
-            st.subheader("Lista Klientów")
-        with col_hdr_btn:
-            multi_select_active = st.toggle("☑️ Zaznacz wiele", key="toggle_multi_select")
-
-        if "clients_to_delete" not in st.session_state:
-            st.session_state["clients_to_delete"] = []
-
-        clients_to_delete = []
-
-        if multi_select_active:
-            st.markdown("---")
-            col_info, col_del_action = st.columns([2, 1])
-            with col_info:
-                st.caption("Zaznacz wybrane pozycje na liście poniżej:")
-            
-            for _, r_item in filtered_df.iterrows():
-                if st.checkbox(f"Zaznacz: {r_item['name']}", key=f"multi_del_{r_item['id']}"):
-                    clients_to_delete.append(r_item["name"])
-
-            if clients_to_delete:
-                with col_del_action:
-                    confirm_bulk = st.checkbox("Potwierdź usunięcie", key="confirm_bulk_del")
-                    if st.button("🗑️ Usuń", type="primary", key="btn_bulk_del"):
-                        if confirm_bulk:
-                            for cl_del in clients_to_delete:
-                                c.execute("DELETE FROM clients WHERE name = ?", (cl_del,))
-                                c.execute("DELETE FROM purchases WHERE client_name = ?", (cl_del,))
-                                c.execute("DELETE FROM visits WHERE client_name = ?", (cl_del,))
-                                c.execute("DELETE FROM orders WHERE client_name = ?", (cl_del,))
-                            conn.commit()
-                            st.success("Pomyślnie usunięto zaznaczonych klientów!")
-                            st.rerun()
-                        else:
-                            st.error("Zaznacz pole potwierdzenia!")
-
-        st.markdown("---")
-
-        if "expanded_client_id" not in st.session_state:
-            st.session_state["expanded_client_id"] = None
-
-        for _, row in filtered_df.iterrows():
-            days_str = f"{row['Dni od wizyty']} dni" if row['Dni od wizyty'] != 999 else "Brak wizyt"
-            color = (
-                "⚪" if row["Dni od wizyty"] == 999 else
-                ("🔴" if row["Dni od wizyty"] > 30 else ("🟡" if row["Dni od wizyty"] > 14 else "🟢"))
-            )
-
-            chain_str = f" [{row['chain_name']}]" if row.get("chain_name") else ""
-            expander_title = f"{color} {row['name']}{chain_str} ({row['category']}) — {days_str}"
-            
-            is_expanded = st.session_state["expanded_client_id"] == row["id"]
-            
-            with st.expander(expander_title, expanded=is_expanded):
-                if st.session_state["expanded_client_id"] != row["id"]:
-                    st.session_state["expanded_client_id"] = row["id"]
-                
-                render_client_card(row, key_prefix="list")
-
-    else:
-        st.info("Baza jest pusta. Dodaj pierwszego klienta.")
-
 # --- TAB 2: NOWA WIZYTA I ZAMÓWIENIE ---
-with tab2:
+with tab_new_visit:
     st.subheader("➕ Nowa Wizyta i Zamówienie")
     df_clients = pd.read_sql_query("SELECT id, name FROM clients", conn)
 
@@ -750,8 +636,175 @@ with tab2:
     else:
         st.warning("Najpierw dodaj klienta w zakładce 'Nowy klient'!")
 
-# --- TAB 3: IMPORT EXCELA ---
-with tab3:
+# --- TAB 3: WIZYTY (CHRONOLOGICZNA LISTA ROZWIJANA) ---
+with tab_visits:
+    st.subheader("📋 Historia Wszystkich Wizyt")
+    st.caption("Chronologiczna lista ostatnich wizyt u klientów:")
+
+    df_all_visits = pd.read_sql_query(
+        "SELECT id, client_name, visit_date, notes, order_details, created_at FROM visits ORDER BY visit_date DESC, id DESC",
+        conn
+    )
+
+    if not df_all_visits.empty:
+        for _, v_row in df_all_visits.iterrows():
+            v_id = v_row["id"]
+            v_client = v_row["client_name"]
+            v_date = v_row["visit_date"]
+            
+            # Lista rozwijalna z nazwą klienta i datą
+            expander_title = f"📍 {v_client} — Data wizyty: {v_date}"
+            
+            with st.expander(expander_title):
+                if v_row["notes"]:
+                    st.markdown("**📝 Prywatne uwagi:**")
+                    st.write(v_row["notes"])
+                else:
+                    st.caption("Brak prywatnych uwag z tej wizyty.")
+
+                if v_row["order_details"]:
+                    st.markdown("**🛒 Zamówienie:**")
+                    st.code(v_row["order_details"], language="text")
+                else:
+                    st.caption("Brak złożonego zamówienia podczas tej wizyty.")
+                
+                if v_row["created_at"]:
+                    st.caption(f"Zapisano wsystemie: {v_row['created_at']}")
+
+                st.markdown("---")
+                confirm_del_v = st.checkbox(f"Potwierdzam usunięcie tej wizyty", key=f"tab_vis_conf_{v_id}")
+                if st.button("🗑️ Usuń tę wizytę", key=f"tab_vis_btn_{v_id}", type="primary"):
+                    if confirm_del_v:
+                        c.execute("DELETE FROM visits WHERE id = ?", (v_id,))
+                        
+                        # Aktualizacja ostatniej wizyty klienta
+                        c.execute("SELECT MAX(visit_date) FROM visits WHERE client_name = ?", (v_client,))
+                        new_last_v = c.fetchone()[0]
+                        c.execute("UPDATE clients SET last_visit = ? WHERE name = ?", (new_last_v, v_client))
+                        
+                        conn.commit()
+                        st.success("Pomyślnie usunięto wizytę!")
+                        st.rerun()
+                    else:
+                        st.warning("Zaznacz pole potwierdzenia, aby usunąć tę wizytę.")
+    else:
+        st.info("Brak zarejestrowanych wizyt w systemie.")
+
+# --- TAB 4: LISTA KLIENTÓW ---
+with tab_clients:
+    df = pd.read_sql_query("SELECT * FROM clients", conn)
+
+    if not df.empty:
+        total_count = len(df)
+        gold_count = len(df[df["category"] == "🥇 Złoty"])
+        silver_count = len(df[df["category"] == "🥈 Srebrny"])
+        bronze_count = len(df[df["category"] == "🥉 Brązowy"])
+
+        st.markdown(f"👥 **Liczba klientów ogółem:** `{total_count}` | 🥇 Złote: `{gold_count}` | 🥈 Srebrne: `{silver_count}` | 🥉 Brązowe: `{bronze_count}`")
+        st.markdown("---")
+
+        if st.button("🔄 Przelicz scoring klientów wg obrotów"):
+            recalculate_client_scores()
+            st.success("Zaktualizowano scoring klientów (Złoty: >=7800 zł, Srebrny: >=3900 zł, Brązowy: <3900 zł)")
+            st.rerun()
+
+        df["last_visit_clean"] = pd.to_datetime(df["last_visit"], errors="coerce")
+        today = pd.to_datetime("today")
+        df["Dni od wizyty"] = (today - df["last_visit_clean"]).dt.days.fillna(999).astype(int)
+
+        col_filter, col_sort = st.columns(2)
+        with col_filter:
+            category_filter = st.multiselect(
+                "Filtruj priorytet / scoring:",
+                ["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"],
+                default=["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"],
+            )
+
+        with col_sort:
+            sort_option = st.selectbox(
+                "Sortuj według:",
+                [
+                    "Nazwa klienta (A-Z)",
+                    "Dni od wizyty (od najdawniejszych)",
+                    "Dni od wizyty (od najnowszych)",
+                ],
+                index=0
+            )
+
+        filtered_df = df[df["category"].isin(category_filter)]
+
+        if sort_option == "Dni od wizyty (od najdawniejszych)":
+            filtered_df = filtered_df.sort_values(by="Dni od wizyty", ascending=False)
+        elif sort_option == "Dni od wizyty (od najnowszych)":
+            filtered_df = filtered_df.sort_values(by="Dni od wizyty", ascending=True)
+        elif sort_option == "Nazwa klienta (A-Z)":
+            filtered_df = filtered_df.sort_values(by="name", ascending=True)
+
+        col_hdr_title, col_hdr_btn = st.columns([2, 1])
+        with col_hdr_title:
+            st.subheader("Lista Klientów")
+        with col_hdr_btn:
+            multi_select_active = st.toggle("☑️ Zaznacz wiele", key="toggle_multi_select")
+
+        if "clients_to_delete" not in st.session_state:
+            st.session_state["clients_to_delete"] = []
+
+        clients_to_delete = []
+
+        if multi_select_active:
+            st.markdown("---")
+            col_info, col_del_action = st.columns([2, 1])
+            with col_info:
+                st.caption("Zaznacz wybrane pozycje na liście poniżej:")
+            
+            for _, r_item in filtered_df.iterrows():
+                if st.checkbox(f"Zaznacz: {r_item['name']}", key=f"multi_del_{r_item['id']}"):
+                    clients_to_delete.append(r_item["name"])
+
+            if clients_to_delete:
+                with col_del_action:
+                    confirm_bulk = st.checkbox("Potwierdź usunięcie", key="confirm_bulk_del")
+                    if st.button("🗑️ Usuń", type="primary", key="btn_bulk_del"):
+                        if confirm_bulk:
+                            for cl_del in clients_to_delete:
+                                c.execute("DELETE FROM clients WHERE name = ?", (cl_del,))
+                                c.execute("DELETE FROM purchases WHERE client_name = ?", (cl_del,))
+                                c.execute("DELETE FROM visits WHERE client_name = ?", (cl_del,))
+                                c.execute("DELETE FROM orders WHERE client_name = ?", (cl_del,))
+                            conn.commit()
+                            st.success("Pomyślnie usunięto zaznaczonych klientów!")
+                            st.rerun()
+                        else:
+                            st.error("Zaznacz pole potwierdzenia!")
+
+        st.markdown("---")
+
+        if "expanded_client_id" not in st.session_state:
+            st.session_state["expanded_client_id"] = None
+
+        for _, row in filtered_df.iterrows():
+            days_str = f"{row['Dni od wizyty']} dni" if row['Dni od wizyty'] != 999 else "Brak wizyt"
+            color = (
+                "⚪" if row["Dni od wizyty"] == 999 else
+                ("🔴" if row["Dni od wizyty"] > 30 else ("🟡" if row["Dni od wizyty"] > 14 else "🟢"))
+            )
+
+            chain_str = f" [{row['chain_name']}]" if row.get("chain_name") else ""
+            expander_title = f"{color} {row['name']}{chain_str} ({row['category']}) — {days_str}"
+            
+            is_expanded = st.session_state["expanded_client_id"] == row["id"]
+            
+            with st.expander(expander_title, expanded=is_expanded):
+                if st.session_state["expanded_client_id"] != row["id"]:
+                    st.session_state["expanded_client_id"] = row["id"]
+                
+                render_client_card(row, key_prefix="list")
+
+    else:
+        st.info("Baza jest pusta. Dodaj pierwszego klienta.")
+
+# --- TAB 5: IMPORT EXCELA ---
+with tab_excel:
     st.subheader("📊 Wczytaj raport ze sprzedaży z Excela")
 
     report_type = st.radio(
@@ -921,8 +974,8 @@ with tab3:
         except Exception as e:
             st.error(f"Błąd podczas odczytu pliku Excel: {e}")
 
-# --- TAB 4: DODAJ NOWEGO KLIENTA ---
-with tab4:
+# --- TAB 6: DODAJ NOWEGO KLIENTA ---
+with tab_new_client:
     st.subheader("👤 Zgłaszanie nowych klientów")
 
     mode = st.radio("Wybierz sposób dodania:", ["Wpis ręczny (jeden klient)", "📥 Masowy import z pliku Excel"], horizontal=True)
@@ -1019,7 +1072,7 @@ with tab4:
 
                         c_phone = str(r[col_phone]).strip() if col_phone != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_phone]) else None
                         c_email = str(r[col_email]).strip() if col_email != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_email]) else None
-                        c_addr = str(r[col_addr]).strip() if col_addr != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_addr]) else None
+                        c_addr = str(r[col_addr]).strip() if col_email != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_addr]) else None
                         c_pl = str(r[col_pl]).strip() if col_pl != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_pl]) else None
 
                         c.execute("SELECT COUNT(*) FROM clients WHERE name = ?", (c_name,))
@@ -1057,8 +1110,8 @@ with tab4:
             except Exception as ex:
                 st.error(f"Błąd podczas odczytu pliku: {ex}")
 
-# --- TAB 5: ZARZĄDZANIE CENNIKAMI ---
-with tab5:
+# --- TAB 7: ZARZĄDZANIE CENNIKAMI ---
+with tab_pl:
     st.subheader("🏷️ Przegląd i dodawanie cenników")
 
     df_pl = pd.read_sql_query("SELECT * FROM price_lists", conn)
