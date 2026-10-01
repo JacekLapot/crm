@@ -8,20 +8,25 @@ import streamlit as st
 
 # --- KONFIGURACJA STRONY POD TELEFON ---
 st.set_page_config(
-    page_title="CRM Wizyty i Zamówienia", page_icon="📱", layout="centered"
+    page_title="CRM Wizyty, Zamówienia i Dane",
+    page_icon="📱",
+    layout="centered",
 )
 
 # --- BAZA DANYCH ---
 conn = sqlite3.connect("crm.db", check_same_thread=False)
 c = conn.cursor()
 
-# Tabela klientów
+# Tabela klientów (rozszerzona o telefon, email i adres)
 c.execute(
     """
     CREATE TABLE IF NOT EXISTS clients (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL UNIQUE,
         category TEXT NOT NULL,
+        phone TEXT,
+        email TEXT,
+        address TEXT,
         price_list TEXT,
         last_visit DATE,
         notes TEXT,
@@ -62,7 +67,7 @@ c.execute(
 """
 )
 
-# Tabela na zamówienia i historię maili
+# Tabela zamówień
 c.execute(
     """
     CREATE TABLE IF NOT EXISTS orders (
@@ -76,8 +81,11 @@ c.execute(
 )
 conn.commit()
 
-# Łagodna migracja kolumn
+# Łagodna migracja kolumn dla starych baz
 for column, col_type in [
+    ("phone", "TEXT"),
+    ("email", "TEXT"),
+    ("address", "TEXT"),
     ("total_bought_val", "REAL DEFAULT 0.0"),
     ("total_returned_val", "REAL DEFAULT 0.0"),
     ("net_val", "REAL DEFAULT 0.0"),
@@ -152,6 +160,17 @@ with tab1:
             with st.expander(
                 f"{color} {row['name']} ({row['category']}) — {row['Dni od wizyty']} dni"
             ):
+                # Dane kontaktowe
+                st.markdown("📞 **Dane kontaktowe:**")
+                if row["phone"]:
+                    st.write(f"• **Telefon:** [{row['phone']}](tel:{row['phone']})")
+                if row["email"]:
+                    st.write(f"• **E-mail:** [{row['email']}](mailto:{row['email']})")
+                if row["address"]:
+                    st.write(f"• **Adres:** {row['address']}")
+                if not any([row["phone"], row["email"], row["address"]]):
+                    st.caption("Brak danych kontaktowych")
+
                 st.write(f"**Ostatnia wizyta:** {row['last_visit']}")
                 st.write(
                     f"**Przypisany cennik:** 🏷️ `{row['price_list'] if row['price_list'] else 'Brak'}`"
@@ -199,7 +218,7 @@ with tab1:
                     row["notes"] if row["notes"] else "Brak wpisanych uwag"
                 )
 
-                # Podgląd e-maili wysłanych zamówień
+                # Podgląd historii zamówień
                 df_orders = pd.read_sql_query(
                     "SELECT order_details, created_at FROM orders WHERE client_name = ? ORDER BY id DESC LIMIT 3",
                     conn,
@@ -208,9 +227,7 @@ with tab1:
                 if not df_orders.empty:
                     with st.popover("✉️ Historia wysłanych zamówień"):
                         for _, ord_r in df_orders.iterrows():
-                            st.caption(
-                                f"Wysłano: {ord_r['created_at']}"
-                            )
+                            st.caption(f"Wysłano: {ord_r['created_at']}")
                             st.text(ord_r["order_details"])
                             st.markdown("---")
     else:
@@ -260,7 +277,6 @@ with tab2:
             if submit_all:
                 now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-                # 1. Zapis prywatnych notatek w CRM
                 c.execute(
                     "SELECT notes FROM clients WHERE name = ?",
                     (selected_client,),
@@ -278,7 +294,6 @@ with tab2:
                     (visit_date, updated_notes, selected_client),
                 )
 
-                # 2. Wysyłka e-maila, jeśli wpisano treść zamówienia
                 if order_text.strip():
                     if not app_pass:
                         st.error(
@@ -317,7 +332,9 @@ with tab2:
                         except Exception as err:
                             st.error(f"Błąd podczas wysyłki e-maila: {err}")
                 else:
-                    st.success(f"Zapisano prywatną notatkę z wizyty dla {selected_client} (brak zamówienia do wysłania).")
+                    st.success(
+                        f"Zapisano prywatną notatkę z wizyty dla {selected_client} (brak zamówienia do wysłania)."
+                    )
 
                 conn.commit()
                 st.rerun()
@@ -465,10 +482,20 @@ with tab4:
     )
 
     with st.form("add_client_form", clear_on_submit=True):
-        name = st.text_input("Nazwa firmy / Imię i nazwisko")
+        name = st.text_input("Nazwa firmy / Imię i nazwisko *")
         category = st.selectbox(
             "Priorytet", ["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"]
         )
+
+        st.markdown("---")
+        st.markdown("📞 **Dane kontaktowe (opcjonalnie)**")
+        phone = st.text_input("Numer telefonu", placeholder="np. 600111222")
+        email = st.text_input("Adres e-mail", placeholder="np. sklep@klient.pl")
+        address = st.text_input(
+            "Adres / Lokalizacja", placeholder="np. ul. Główna 5, Kielce"
+        )
+
+        st.markdown("---")
         selected_price_list = st.selectbox(
             "Przypisz cennik", available_price_lists
         )
@@ -482,10 +509,16 @@ with tab4:
             )
             try:
                 c.execute(
-                    "INSERT INTO clients (name, category, price_list, last_visit, notes) VALUES (?, ?, ?, ?, ?)",
+                    """
+                    INSERT INTO clients (name, category, phone, email, address, price_list, last_visit, notes) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
                     (
                         name,
                         category,
+                        phone,
+                        email,
+                        address,
                         selected_price_list,
                         first_visit,
                         initial_note,
