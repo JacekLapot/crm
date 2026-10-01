@@ -17,7 +17,7 @@ st.set_page_config(
 conn = sqlite3.connect("crm.db", check_same_thread=False)
 c = conn.cursor()
 
-# Tabela klientów (rozszerzona o telefon, email i adres)
+# Tabela klientów
 c.execute(
     """
     CREATE TABLE IF NOT EXISTS clients (
@@ -134,9 +134,10 @@ with tab1:
     df = pd.read_sql_query("SELECT * FROM clients", conn)
 
     if not df.empty:
-        df["last_visit"] = pd.to_datetime(df["last_visit"]).dt.date
-        today = datetime.now().date()
-        df["Dni od wizyty"] = (today - df["last_visit"]).dt.days
+        # BEZPIECZNA KONWERSJA DATY (NAPRAWA BŁĘDU ATTRIBUTEERROR)
+        df["last_visit_clean"] = pd.to_datetime(df["last_visit"], errors="coerce")
+        today = pd.to_datetime("today")
+        df["Dni od wizyty"] = (today - df["last_visit_clean"]).dt.days.fillna(0).astype(int)
 
         category_filter = st.multiselect(
             "Filtruj priorytet:",
@@ -276,13 +277,14 @@ with tab2:
 
             if submit_all:
                 now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+                visit_date_str = visit_date.strftime("%Y-%m-%d")
 
                 c.execute(
                     "SELECT notes FROM clients WHERE name = ?",
                     (selected_client,),
                 )
                 old_notes = c.fetchone()[0] or ""
-                note_entry = f"[{visit_date}] {private_notes}".strip()
+                note_entry = f"[{visit_date_str}] {private_notes}".strip()
                 updated_notes = (
                     f"{note_entry}\n{old_notes}"
                     if private_notes
@@ -291,7 +293,7 @@ with tab2:
 
                 c.execute(
                     "UPDATE clients SET last_visit = ?, notes = ? WHERE name = ?",
-                    (visit_date, updated_notes, selected_client),
+                    (visit_date_str, updated_notes, selected_client),
                 )
 
                 if order_text.strip():
@@ -300,10 +302,10 @@ with tab2:
                             "Notatki zapisano, ale zamówienie NIE zostało wysłane – brak Hasła Aplikacji Gmail!"
                         )
                     else:
-                        subject = f"Zamówienie: {selected_client} - {visit_date}"
+                        subject = f"Zamówienie: {selected_client} - {visit_date_str}"
                         body = (
                             f"Zamówienie złożone dla klienta: {selected_client}\n"
-                            f"Data wizyty/zamówienia: {visit_date}\n"
+                            f"Data wizyty/zamówienia: {visit_date_str}\n"
                             f"Przedstawiciel: jacek.lapot@gmail.com\n\n"
                             f"--- TREŚĆ ZAMÓWIENIA ---\n"
                             f"{order_text}\n\n"
@@ -373,6 +375,8 @@ with tab3:
                     st.error("Musisz wskazać co najmniej kolumnę z Klientem!")
                 else:
                     processed_count = 0
+                    report_date_str = report_date.strftime("%Y-%m-%d")
+
                     for _, r in excel_df.iterrows():
                         client_name = str(r[c_client]).strip()
                         item_name = (
@@ -420,7 +424,7 @@ with tab3:
                                 r_qty,
                                 r_val,
                                 net_item_val,
-                                report_date,
+                                report_date_str,
                             ),
                         )
 
@@ -434,7 +438,7 @@ with tab3:
                                 (
                                     client_name,
                                     "🥉 Brązowy",
-                                    datetime.now().date(),
+                                    report_date_str,
                                 ),
                             )
 
@@ -460,7 +464,7 @@ with tab3:
                             SET total_bought_val = ?, total_returned_val = ?, net_val = ?, return_rate = ?, last_report_date = ?
                             WHERE name = ?
                         """,
-                            (sum_b, sum_r, net, ret_rate, report_date, cl_n),
+                            (sum_b, sum_r, net, ret_rate, report_date_str, cl_n),
                         )
 
                     conn.commit()
@@ -504,8 +508,9 @@ with tab4:
         submit_new = st.form_submit_button("Dodaj do bazy")
 
         if submit_new and name:
+            first_visit_str = first_visit.strftime("%Y-%m-%d")
             initial_note = (
-                f"[{first_visit}] {first_note}" if first_note else ""
+                f"[{first_visit_str}] {first_note}" if first_note else ""
             )
             try:
                 c.execute(
@@ -520,7 +525,7 @@ with tab4:
                         email,
                         address,
                         selected_price_list,
-                        first_visit,
+                        first_visit_str,
                         initial_note,
                     ),
                 )
