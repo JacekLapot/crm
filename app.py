@@ -1,4 +1,5 @@
-from datetime import datetime
+from datetime import datetime, timedelta
+import calendar
 import email.mime.multipart
 import email.mime.text
 import smtplib
@@ -7,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 # --- USTAWIENIA HASŁA DOSTĘPU ---
-PIN_CRM = "1136"  # <-- ZMIEŃ TO HASŁO NA SWÓJ PRYWATNY PIN / KOD
+PIN_CRM = "1136"  # Kod dostępu
 
 # --- KONFIGURACJA STRONY POD TELEFON ---
 st.set_page_config(
@@ -32,7 +33,7 @@ if not st.session_state["authenticated"]:
             st.rerun()
         else:
             st.error("Błędny kod dostępu!")
-    st.stop()  # Zatrzymuje wykonywanie reszty kodu, dopóki użytkownik się nie zaloguje
+    st.stop()
 
 # --- BAZA DANYCH ---
 conn = sqlite3.connect("crm.db", check_same_thread=False)
@@ -84,7 +85,10 @@ c.execute(
         returned_qty REAL,
         returned_val REAL,
         net_val REAL,
-        report_date DATE
+        report_date DATE,
+        report_type TEXT DEFAULT 'Dzienny',
+        report_start_date DATE,
+        report_end_date DATE
     )
 """
 )
@@ -103,7 +107,7 @@ c.execute(
 )
 conn.commit()
 
-# Łagodna migracja kolumn dla starych baz
+# Migracja kolumn dla istniejących baz
 for column, col_type in [
     ("chain_name", "TEXT"),
     ("phone", "TEXT"),
@@ -115,6 +119,9 @@ for column, col_type in [
     ("return_rate", "REAL DEFAULT 0.0"),
     ("last_report_date", "DATE"),
     ("price_list", "TEXT"),
+    ("report_type", "TEXT DEFAULT 'Dzienny'"),
+    ("report_start_date", "DATE"),
+    ("report_end_date", "DATE"),
 ]:
     try:
         c.execute(f"ALTER TABLE clients ADD COLUMN {column} {col_type}")
@@ -122,8 +129,18 @@ for column, col_type in [
     except sqlite3.OperationalError:
         pass
 
+for column, col_type in [
+    ("report_type", "TEXT DEFAULT 'Dzienny'"),
+    ("report_start_date", "DATE"),
+    ("report_end_date", "DATE"),
+]:
+    try:
+        c.execute(f"ALTER TABLE purchases ADD COLUMN {column} {col_type}")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
 
-# Funkcja pomocnicza do wysyłania e-maila
+
 def send_email_via_gmail(
     sender_email, app_password, recipient_email, subject, body_text
 ):
@@ -155,11 +172,11 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(
         "➕ Nowa wizyta",
         "📊 Raport Excel",
         "👤 Nowy klient",
-        "🏷️ Cenniki",
+        "🏷️️ Cenniki",
     ]
 )
 
-# Pobranie listy cenników do wykorzystania w edycji i tworzeniu
+# Pobranie listy cenników
 price_lists_df = pd.read_sql_query("SELECT title FROM price_lists", conn)
 available_price_lists = (
     ["Brak"] + price_lists_df["title"].tolist() if not price_lists_df.empty else ["Brak"]
@@ -174,15 +191,32 @@ with tab1:
         today = pd.to_datetime("today")
         df["Dni od wizyty"] = (today - df["last_visit_clean"]).dt.days.fillna(0).astype(int)
 
-        category_filter = st.multiselect(
-            "Filtruj priorytet:",
-            ["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"],
-            default=["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"],
-        )
+        col_filter, col_sort = st.columns(2)
+        with col_filter:
+            category_filter = st.multiselect(
+                "Filtruj priorytet:",
+                ["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"],
+                default=["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"],
+            )
 
-        filtered_df = df[df["category"].isin(category_filter)].sort_values(
-            by="Dni od wizyty", ascending=False
-        )
+        with col_sort:
+            sort_option = st.selectbox(
+                "Sortuj według:",
+                [
+                    "Dni od wizyty (od najdawniejszych)",
+                    "Dni od wizyty (od najnowszych)",
+                    "Nazwa klienta (A-Z)",
+                ],
+            )
+
+        filtered_df = df[df["category"].isin(category_filter)]
+
+        if sort_option == "Dni od wizyty (od najdawniejszych)":
+            filtered_df = filtered_df.sort_values(by="Dni od wizyty", ascending=False)
+        elif sort_option == "Dni od wizyty (od najnowszych)":
+            filtered_df = filtered_df.sort_values(by="Dni od wizyty", ascending=True)
+        elif sort_option == "Nazwa klienta (A-Z)":
+            filtered_df = filtered_df.sort_values(by="name", ascending=True)
 
         st.subheader("Lista Klientów")
 
@@ -226,8 +260,8 @@ with tab1:
                             st.caption(f"Cennik: {row['price_list']}")
                             st.text(pl_res[0])
 
-                # --- SEKCJA EDYCYJNA KARTOTEKI KLIENTA ---
-                with st.popover("✏️ Edytuj dane klienta"):
+                # --- SEKCJA EDYCYJNA ORAZ USUWANIA ---
+                with st.popover("✏️ Edytuj / Usuń klienta"):
                     st.markdown(f"#### Edycja: {row['name']}")
                     with st.form(key=f"edit_form_{row['id']}"):
                         new_name = st.text_input("Nazwa klienta", value=row["name"])
@@ -267,30 +301,81 @@ with tab1:
                             except sqlite3.IntegrityError:
                                 st.error("Klient o takiej nazwie już istnieje!")
 
+                    st.markdown("---")
+                    st.markdown("🚨 **Usuwanie kartoteki:**")
+                    confirm_delete = st.checkbox(f"Potwierdzam chęć usunięcia klienta {row['name']}", key=f"confirm_del_{row['id']}")
+                    if st.button("🗑️ Usuń kartotekę klienta", key=f"delete_btn_{row['id']}", type="primary"):
+                        if confirm_delete:
+                            c.execute("DELETE FROM clients WHERE id = ?", (row["id"],))
+                            c.execute("DELETE FROM purchases WHERE client_name = ?", (row["name"],))
+                            c.execute("DELETE FROM orders WHERE client_name = ?", (row["name"],))
+                            conn.commit()
+                            st.success(f"Usunięto kartotekę klienta: {row['name']}")
+                            st.rerun()
+                        else:
+                            st.warning("Zaznacz pole potwierdzenia, aby usunąć klienta.")
+
                 st.markdown("---")
                 st.markdown("📈 **Statystyki zakupy/zwroty:**")
 
-                net_val = row["net_val"] or 0.0
-                bought_val = row["total_bought_val"] or 0.0
-                returned_val = row["total_returned_val"] or 0.0
-                ret_rate = row["return_rate"] or 0.0
-
-                col_a, col_b = st.columns(2)
-                with col_a:
-                    st.metric("Wartość dostawy (Netto)", f"{net_val:,.2f} zł")
-                    st.metric("Zakupy ogółem", f"{bought_val:,.2f} zł")
-                with col_b:
-                    st.metric("% Zwrotów", f"{ret_rate:.1f}%")
-                    st.metric("Zwroty ogółem", f"{returned_val:,.2f} zł")
-
-                df_items = pd.read_sql_query(
-                    "SELECT item_name as Produkt, bought_qty as Zakup_Ilość, bought_val as Zakup_Kwota, returned_qty as Zwrot_Ilość, returned_val as Zwrot_Kwota, net_val as Wartość_Netto FROM purchases WHERE client_name = ?",
-                    conn,
-                    params=(row["name"],),
+                # WYBÓR OKRESU RAPORTOWANIA DLA KARTOTEKI
+                period_choice = st.selectbox(
+                    "📅 Wybierz okres raportu:",
+                    ["Wszystko", "Ostatni 1 dzień", "Ostatni tydzień (7 dni)", "Ostatni miesiąc (30 dni)"],
+                    key=f"period_sel_{row['id']}"
                 )
-                if not df_items.empty:
+
+                query_p = "SELECT * FROM purchases WHERE client_name = ?"
+                params_p = [row["name"]]
+
+                if period_choice == "Ostatni 1 dzień":
+                    date_limit = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+                    query_p += " AND (report_end_date >= ? OR report_date >= ?)"
+                    params_p.extend([date_limit, date_limit])
+                elif period_choice == "Ostatni tydzień (7 dni)":
+                    date_limit = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+                    query_p += " AND (report_end_date >= ? OR report_date >= ?)"
+                    params_p.extend([date_limit, date_limit])
+                elif period_choice == "Ostatni miesiąc (30 dni)":
+                    date_limit = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+                    query_p += " AND (report_end_date >= ? OR report_date >= ?)"
+                    params_p.extend([date_limit, date_limit])
+
+                df_client_purchases = pd.read_sql_query(query_p, conn, params=params_p)
+
+                if not df_client_purchases.empty:
+                    bought_val = df_client_purchases["bought_val"].sum()
+                    returned_val = df_client_purchases["returned_val"].sum()
+                    net_val = bought_val - returned_val
+                    ret_rate = (returned_val / bought_val * 100) if bought_val > 0 else 0.0
+
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        st.metric("Wartość dostawy (Netto)", f"{net_val:,.2f} zł")
+                        st.metric("Zakupy ogółem", f"{bought_val:,.2f} zł")
+                    with col_b:
+                        st.metric("% Zwrotów", f"{ret_rate:.1f}%")
+                        st.metric("Zwroty ogółem", f"{returned_val:,.2f} zł")
+
+                    df_items_display = df_client_purchases.groupby("item_name").agg({
+                        "bought_qty": "sum",
+                        "bought_val": "sum",
+                        "returned_qty": "sum",
+                        "returned_val": "sum",
+                        "net_val": "sum"
+                    }).reset_index().rename(columns={
+                        "item_name": "Produkt",
+                        "bought_qty": "Zakup_Ilość",
+                        "bought_val": "Zakup_Kwota",
+                        "returned_qty": "Zwrot_Ilość",
+                        "returned_val": "Zwrot_Kwota",
+                        "net_val": "Wartość_Netto"
+                    })
+
                     with st.popover("📦 Pokaż zakupiony asortyment"):
-                        st.dataframe(df_items, use_container_width=True)
+                        st.dataframe(df_items_display, use_container_width=True)
+                else:
+                    st.caption("Brak danych o zakupach/zwrotach dla wybranego okresu.")
 
                 st.markdown("---")
                 st.write("📝 **Prywatne uwagi / Historia wizyt:**")
@@ -298,7 +383,6 @@ with tab1:
                     row["notes"] if row["notes"] else "Brak wpisanych uwag"
                 )
 
-                # Podgląd historii zamówień
                 df_orders = pd.read_sql_query(
                     "SELECT order_details, created_at FROM orders WHERE client_name = ? ORDER BY id DESC LIMIT 3",
                     conn,
@@ -422,10 +506,39 @@ with tab2:
     else:
         st.warning("Najpierw dodaj klienta w zakładce 'Nowy klient'!")
 
-# --- TAB 3: IMPORT EXCELA ---
+# --- TAB 3: IMPORT EXCELA (RAPORTY DZIENNE, TYGODNIOWE, MIESIĘCZNE) ---
 with tab3:
-    st.subheader("📊 Wczytaj dzienny raport z Excela")
-    report_date = st.date_input("Data raportu", datetime.now())
+    st.subheader("📊 Wczytaj raport ze sprzedaży z Excela")
+
+    report_type = st.radio(
+        "Wybierz typ raportu:",
+        ["Dzienny", "Tygodniowy", "Miesięczny"],
+        horizontal=True
+    )
+
+    if report_type == "Dzienny":
+        report_date = st.date_input("Data raportu dziennego", datetime.now())
+        start_d = report_date.strftime("%Y-%m-%d")
+        end_d = start_d
+    elif report_type == "Tygodniowy":
+        selected_d = st.date_input("Wybierz dowolny dzień z tygodnia", datetime.now())
+        monday = selected_d - timedelta(days=selected_d.weekday())
+        sunday = monday + timedelta(days=6)
+        st.info(f"Tydzień: **{monday.strftime('%Y-%m-%d')}** do **{sunday.strftime('%Y-%m-%d')}**")
+        start_d = monday.strftime("%Y-%m-%d")
+        end_d = sunday.strftime("%Y-%m-%d")
+    else: # Miesięczny
+        col_m, col_y = st.columns(2)
+        with col_m:
+            month_num = st.selectbox("Miesiąc", list(range(1, 13)), index=datetime.now().month - 1)
+        with col_y:
+            year_num = st.number_input("Rok", value=datetime.now().year, step=1)
+        
+        last_day = calendar.monthrange(year_num, month_num)[1]
+        start_d = f"{year_num:04d}-{month_num:02d}-01"
+        end_d = f"{year_num:04d}-{month_num:02d}-{last_day:02d}"
+        st.info(f"Miesiąc: **{start_d}** do **{end_d}**")
+
     uploaded_file = st.file_uploader(
         "Wybierz plik Excel (.xlsx lub .xls)", type=["xlsx", "xls"], key="excel_sales"
     )
@@ -454,10 +567,12 @@ with tab3:
                     st.error("Musisz wskazać co najmniej kolumnę z Klientem!")
                 else:
                     processed_count = 0
-                    report_date_str = report_date.strftime("%Y-%m-%d")
 
                     for _, r in excel_df.iterrows():
                         client_name = str(r[c_client]).strip()
+                        if not client_name or client_name == "nan":
+                            continue
+
                         item_name = (
                             str(r[c_item])
                             if c_item != "-- Wybierz kolumnę --"
@@ -492,8 +607,10 @@ with tab3:
 
                         c.execute(
                             """
-                            INSERT INTO purchases (client_name, item_name, bought_qty, bought_val, returned_qty, returned_val, net_val, report_date)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            INSERT INTO purchases (
+                                client_name, item_name, bought_qty, bought_val, returned_qty, returned_val, net_val, report_date, report_type, report_start_date, report_end_date
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                             (
                                 client_name,
@@ -503,7 +620,10 @@ with tab3:
                                 r_qty,
                                 r_val,
                                 net_item_val,
-                                report_date_str,
+                                end_d,
+                                report_type,
+                                start_d,
+                                end_d,
                             ),
                         )
 
@@ -517,7 +637,7 @@ with tab3:
                                 (
                                     client_name,
                                     "🥉 Brązowy",
-                                    report_date_str,
+                                    end_d,
                                 ),
                             )
 
@@ -543,12 +663,12 @@ with tab3:
                             SET total_bought_val = ?, total_returned_val = ?, net_val = ?, return_rate = ?, last_report_date = ?
                             WHERE name = ?
                         """,
-                            (sum_b, sum_r, net, ret_rate, report_date_str, cl_n),
+                            (sum_b, sum_r, net, ret_rate, end_d, cl_n),
                         )
 
                     conn.commit()
                     st.success(
-                        f"Pomyślnie przetworzono {processed_count} pozycji z pliku Excel!"
+                        f"Pomyślnie przetworzono {processed_count} pozycji z raportu ({report_type.lower()})!"
                     )
                     st.rerun()
 
