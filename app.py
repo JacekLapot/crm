@@ -18,7 +18,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# --- CUSTOM HEADER & MANIFEST PWA DLA TELEFONU ---
+# --- CUSTOM HEADER & MANIFEST PWA DLA TELEFONU Z SERVICE WORKEREM ---
 st.markdown(
     """
     <head>
@@ -31,6 +31,17 @@ st.markdown(
         <meta name="theme-color" content="#0e1117">
         <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍞</text></svg>">
         <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍞</text></svg>">
+        <script>
+            if ('serviceWorker' in navigator) {
+                window.addEventListener('load', function() {
+                    navigator.serviceWorker.register('/sw.js').then(function(registration) {
+                        console.log('ServiceWorker registration successful');
+                    }, function(err) {
+                        console.log('ServiceWorker registration failed: ', err);
+                    });
+                });
+            }
+        </script>
     </head>
     <style>
         .stApp, [data-testid="stSidebar"] {
@@ -936,7 +947,7 @@ with tab4:
                             added_cnt += 1
 
                     conn.commit()
-                    st.success(f"Gotowe! Dodano {added_cnt} nowych kartotek, zaktualizowano {updated_cnt} istniejących.")
+                    st.success(f"Gotowe! Dodano {added_cnt} nowych kartotek, zaktualizowano {updated_cnt} iściejących.")
                     st.rerun()
 
             except Exception as ex:
