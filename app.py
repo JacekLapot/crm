@@ -32,49 +32,35 @@ st.markdown(
         <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍞</text></svg>">
     </head>
     <style>
-        /* Tło aplikacji i panelu bocznego */
         .stApp, [data-testid="stSidebar"] {
             background-color: #0e1117 !important;
             color: #ffffff !important;
         }
-
-        /* Nagłówki, teksty i etykiety */
         h1, h2, h3, h4, h5, h6, p, label, span, div {
             color: #e0e0e0 !important;
         }
-
-        /* Karty expanderów, popoverów i formularzy */
         .stExpander, [data-testid="stPopoverBody"], [data-testid="stForm"] {
             background-color: #161b22 !important;
             border: 1px solid #30363d !important;
             border-radius: 8px !important;
         }
-
-        /* Pola tekstowe i wyboru */
         div[data-baseweb="input"], div[data-baseweb="select"], textarea {
             background-color: #21262d !important;
             color: #ffffff !important;
             border-color: #30363d !important;
         }
-
-        /* Przyciski */
         button {
             background-color: #21262d !important;
             color: #ffffff !important;
             border: 1px solid #30363d !important;
         }
-
         button:hover {
             background-color: #30363d !important;
             border-color: #8b949e !important;
         }
-
-        /* Tabele Streamlit */
         div[data-testid="stDataFrame"] {
             background-color: #161b22 !important;
         }
-
-        /* Wskaźniki st.metric */
         div[data-testid="stMetricValue"] {
             color: #58a6ff !important;
         }
@@ -159,7 +145,21 @@ c.execute(
 """
 )
 
-# Tabela zamówień
+# Tabela wizyt i zamówień
+c.execute(
+    """
+    CREATE TABLE IF NOT EXISTS visits (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_name TEXT NOT NULL,
+        visit_date DATE NOT NULL,
+        notes TEXT,
+        order_details TEXT,
+        created_at DATETIME
+    )
+"""
+)
+
+# Tabela zamówień (zachowana dla zgodności)
 c.execute(
     """
     CREATE TABLE IF NOT EXISTS orders (
@@ -222,7 +222,7 @@ def send_email_via_gmail(
         server.send_message(msg)
 
 
-st.title("🍞 Chlebownik")
+st.title("📱 Mobilny CRM")
 
 # Przycisk wylogowania w panelu bocznym
 with st.sidebar:
@@ -255,7 +255,7 @@ with tab1:
     if not df.empty:
         df["last_visit_clean"] = pd.to_datetime(df["last_visit"], errors="coerce")
         today = pd.to_datetime("today")
-        df["Dni od wizyty"] = (today - df["last_visit_clean"]).dt.days.fillna(0).astype(int)
+        df["Dni od wizyty"] = (today - df["last_visit_clean"]).dt.days.fillna(999).astype(int)
 
         col_filter, col_sort = st.columns(2)
         with col_filter:
@@ -287,15 +287,15 @@ with tab1:
         st.subheader("Lista Klientów")
 
         for _, row in filtered_df.iterrows():
+            days_str = f"{row['Dni od wizyty']} dni" if row['Dni od wizyty'] != 999 else "Brak wizyt"
             color = (
-                "🔴"
-                if row["Dni od wizyty"] > 30
-                else ("🟡" if row["Dni od wizyty"] > 14 else "🟢")
+                "⚪" if row["Dni od wizyty"] == 999 else
+                ("🔴" if row["Dni od wizyty"] > 30 else ("🟡" if row["Dni od wizyty"] > 14 else "🟢"))
             )
 
             chain_str = f" [{row['chain_name']}]" if row.get("chain_name") else ""
             with st.expander(
-                f"{color} {row['name']}{chain_str} ({row['category']}) — {row['Dni od wizyty']} dni"
+                f"{color} {row['name']}{chain_str} ({row['category']}) — {days_str}"
             ):
                 # Dane kontaktowe
                 st.markdown("📞 **Dane kontaktowe:**")
@@ -310,7 +310,7 @@ with tab1:
                 if not any([row.get("chain_name"), row["phone"], row["email"], row["address"]]):
                     st.caption("Brak danych kontaktowych")
 
-                st.write(f"**Ostatnia wizyta:** {row['last_visit']}")
+                st.write(f"**Ostatnia wizyta:** {row['last_visit'] if row['last_visit'] else 'Brak wpisanej wizyty'}")
                 st.write(
                     f"**Przypisany cennik:** 🏷️ `{row['price_list'] if row['price_list'] else 'Brak'}`"
                 )
@@ -351,6 +351,7 @@ with tab1:
                             try:
                                 if new_name != row["name"]:
                                     c.execute("UPDATE purchases SET client_name = ? WHERE client_name = ?", (new_name, row["name"]))
+                                    c.execute("UPDATE visits SET client_name = ? WHERE client_name = ?", (new_name, row["name"]))
                                     c.execute("UPDATE orders SET client_name = ? WHERE client_name = ?", (new_name, row["name"]))
 
                                 c.execute(
@@ -374,6 +375,7 @@ with tab1:
                         if confirm_delete:
                             c.execute("DELETE FROM clients WHERE id = ?", (row["id"],))
                             c.execute("DELETE FROM purchases WHERE client_name = ?", (row["name"],))
+                            c.execute("DELETE FROM visits WHERE client_name = ?", (row["name"],))
                             c.execute("DELETE FROM orders WHERE client_name = ?", (row["name"],))
                             conn.commit()
                             st.success(f"Usunięto kartotekę klienta: {row['name']}")
@@ -442,23 +444,37 @@ with tab1:
                 else:
                     st.caption("Brak danych o zakupach/zwrotach dla wybranego okresu.")
 
+                # --- SEKCJA HISTORII WIZYT I ZAMÓWIEŃ ---
                 st.markdown("---")
-                st.write("📝 **Prywatne uwagi / Historia wizyt:**")
-                st.text(
-                    row["notes"] if row["notes"] else "Brak wpisanych uwag"
-                )
+                st.markdown("🗓️ **Historia wizyt i zamówień:**")
 
-                df_orders = pd.read_sql_query(
-                    "SELECT order_details, created_at FROM orders WHERE client_name = ? ORDER BY id DESC LIMIT 3",
+                df_visits = pd.read_sql_query(
+                    "SELECT visit_date, notes, order_details, created_at FROM visits WHERE client_name = ? ORDER BY id DESC",
                     conn,
                     params=(row["name"],),
                 )
-                if not df_orders.empty:
-                    with st.popover("✉️ Historia wysłanych zamówień"):
-                        for _, ord_r in df_orders.iterrows():
-                            st.caption(f"Wysłano: {ord_r['created_at']}")
-                            st.text(ord_r["order_details"])
-                            st.markdown("---")
+
+                if not df_visits.empty:
+                    for _, v_row in df_visits.iterrows():
+                        v_date_str = v_row["visit_date"]
+                        with st.expander(f"📍 Wizyta: {v_date_str}"):
+                            if v_row["notes"]:
+                                st.markdown("**📝 Uwagi:**")
+                                st.write(v_row["notes"])
+                            else:
+                                st.caption("Brak uwag z tej wizyty.")
+
+                            if v_row["order_details"]:
+                                st.markdown("**🛒 Zamówienie:**")
+                                st.code(v_row["order_details"], language="text")
+                            else:
+                                st.caption("Brak złożonego zamówienia podczas tej wizyty.")
+                            
+                            if v_row["created_at"]:
+                                st.caption(f"Zapisano: {v_row['created_at']}")
+                else:
+                    st.caption("Brak zarejestrowanych wizyt dla tego klienta.")
+
     else:
         st.info("Baza jest pusta. Dodaj pierwszego klienta.")
 
@@ -507,27 +523,25 @@ with tab2:
                 now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
                 visit_date_str = visit_date.strftime("%Y-%m-%d")
 
+                # Zapis wizyty do dedykowanej tabeli visits
                 c.execute(
-                    "SELECT notes FROM clients WHERE name = ?",
-                    (selected_client,),
-                )
-                old_notes = c.fetchone()[0] or ""
-                note_entry = f"[{visit_date_str}] {private_notes}".strip()
-                updated_notes = (
-                    f"{note_entry}\n{old_notes}"
-                    if private_notes
-                    else old_notes
+                    """
+                    INSERT INTO visits (client_name, visit_date, notes, order_details, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (selected_client, visit_date_str, private_notes if private_notes.strip() else None, order_text if order_text.strip() else None, now_str)
                 )
 
+                # Aktualizacja daty ostatniej wizyty u klienta
                 c.execute(
-                    "UPDATE clients SET last_visit = ?, notes = ? WHERE name = ?",
-                    (visit_date_str, updated_notes, selected_client),
+                    "UPDATE clients SET last_visit = ? WHERE name = ?",
+                    (visit_date_str, selected_client),
                 )
 
                 if order_text.strip():
                     if not app_pass:
                         st.error(
-                            "Notatki zapisano, ale zamówienie NIE zostało wysłane – brak Hasła Aplikacji Gmail!"
+                            "Wizytę zapisano w historii, ale zamówienie NIE zostało wysłane – brak Hasła Aplikacji Gmail!"
                         )
                     else:
                         subject = f"Zamówienie: {selected_client} - {visit_date_str}"
@@ -563,7 +577,7 @@ with tab2:
                             st.error(f"Błąd podczas wysyłki e-maila: {err}")
                 else:
                     st.success(
-                        f"Zapisano prywatną notatkę z wizyty dla {selected_client} (brak zamówienia do wysłania)."
+                        f"Zapisano wizytę dla {selected_client}."
                     )
 
                 conn.commit()
@@ -698,11 +712,10 @@ with tab3:
                         )
                         if c.fetchone()[0] == 0:
                             c.execute(
-                                "INSERT INTO clients (name, category, last_visit) VALUES (?, ?, ?)",
+                                "INSERT INTO clients (name, category) VALUES (?, ?)",
                                 (
                                     client_name,
                                     "🥉 Brązowy",
-                                    end_d,
                                 ),
                             )
 
@@ -766,20 +779,14 @@ with tab4:
             selected_price_list = st.selectbox(
                 "Przypisz cennik", available_price_lists
             )
-            first_visit = st.date_input("Data pierwszej wizyty", datetime.now())
-            first_note = st.text_area("Pierwsza notatka (opcjonalnie)")
             submit_new = st.form_submit_button("Dodaj do bazy")
 
             if submit_new and name:
-                first_visit_str = first_visit.strftime("%Y-%m-%d")
-                initial_note = (
-                    f"[{first_visit_str}] {first_note}" if first_note else ""
-                )
                 try:
                     c.execute(
                         """
-                        INSERT INTO clients (name, category, chain_name, phone, email, address, price_list, last_visit, notes) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO clients (name, category, chain_name, phone, email, address, price_list) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             name,
@@ -789,8 +796,6 @@ with tab4:
                             email,
                             address,
                             selected_price_list if selected_price_list != "Brak" else None,
-                            first_visit_str,
-                            initial_note,
                         ),
                     )
                     conn.commit()
@@ -824,8 +829,6 @@ with tab4:
                     col_email = st.selectbox("E-mail", excel_cols)
                     col_addr = st.selectbox("Adres", excel_cols)
                     col_pl = st.selectbox("Cennik", excel_cols)
-                    col_visit = st.selectbox("Data wizyty", excel_cols)
-                    col_notes = st.selectbox("Uwagi / Notatka", excel_cols)
 
                 if st.button("🚀 Utwórz kartoteki klientów"):
                     added_cnt = 0
@@ -846,9 +849,6 @@ with tab4:
                         c_email = str(r[col_email]).strip() if col_email != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_email]) else None
                         c_addr = str(r[col_addr]).strip() if col_addr != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_addr]) else None
                         c_pl = str(r[col_pl]).strip() if col_pl != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_pl]) else None
-
-                        v_date = str(r[col_visit]).split(" ")[0] if col_visit != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_visit]) else datetime.now().strftime("%Y-%m-%d")
-                        c_notes = str(r[col_notes]).strip() if col_notes != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_notes]) else ""
 
                         c.execute("SELECT COUNT(*) FROM clients WHERE name = ?", (c_name,))
                         exists = c.fetchone()[0] > 0
@@ -871,15 +871,15 @@ with tab4:
                         else:
                             c.execute(
                                 """
-                                INSERT INTO clients (name, category, chain_name, phone, email, address, price_list, last_visit, notes)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                INSERT INTO clients (name, category, chain_name, phone, email, address, price_list)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
                                 """,
-                                (c_name, c_cat, c_chain, c_phone, c_email, c_addr, c_pl, v_date, c_notes)
+                                (c_name, c_cat, c_chain, c_phone, c_email, c_addr, c_pl)
                             )
                             added_cnt += 1
 
                     conn.commit()
-                    st.success(f"Gotowe! Dodano {added_cnt} nowych kartotek, zaktualizowano {updated_cnt} iściejących.")
+                    st.success(f"Gotowe! Dodano {added_cnt} nowych kartotek, zaktualizowano {updated_cnt} istniejących.")
                     st.rerun()
 
             except Exception as ex:
