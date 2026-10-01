@@ -104,7 +104,7 @@ if not st.session_state["authenticated"]:
 conn = sqlite3.connect("crm.db", check_same_thread=False)
 c = conn.cursor()
 
-# Tabela klientów (z podziałem na kategorię główną i podgrupę, np. Nowy klient)
+# Tabela klientów
 c.execute(
     """
     CREATE TABLE IF NOT EXISTS clients (
@@ -153,7 +153,7 @@ c.execute(
 """
 )
 
-# Tabela pozycji z raportu Excela
+# Tabela zakupów
 c.execute(
     """
     CREATE TABLE IF NOT EXISTS purchases (
@@ -173,7 +173,7 @@ c.execute(
 """
 )
 
-# Tabela wizyt i zamówień
+# Tabela wizyt
 c.execute(
     """
     CREATE TABLE IF NOT EXISTS visits (
@@ -200,7 +200,7 @@ c.execute(
 """
 )
 
-# Tabela zadań (To-Do) z aktualizacjami
+# Tabela zadań (To-Do)
 c.execute(
     """
     CREATE TABLE IF NOT EXISTS tasks (
@@ -216,7 +216,7 @@ c.execute(
 )
 conn.commit()
 
-# Migracja kolumn dla istniejących baz
+# Migracja kolumn
 for column, col_type in [
     ("sub_category", "TEXT DEFAULT 'Standardowy'"),
     ("chain_name", "TEXT"),
@@ -247,7 +247,6 @@ def send_email_via_gmail(
     msg["From"] = sender_email
     msg["To"] = recipient_email
     msg["Subject"] = subject
-
     msg.attach(email.mime.text.MIMEText(body_text, "plain", "utf-8"))
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
@@ -256,7 +255,6 @@ def send_email_via_gmail(
 
 
 def recalculate_client_scores():
-    """Automatyczne przeliczanie scoringu klientów na podstawie zaksięgowanych zakupów netto"""
     c.execute("SELECT name FROM clients")
     all_clients = c.fetchall()
     
@@ -286,7 +284,6 @@ def recalculate_client_scores():
 
 
 def render_client_card(row, key_prefix="card"):
-    """Pomocnicza funkcja renderująca pełną kartotekę klienta"""
     today = pd.to_datetime("today")
     last_v_dt = pd.to_datetime(row["last_visit"], errors="coerce")
     days_from_visit = (today - last_v_dt).days if pd.notnull(last_v_dt) else 999
@@ -531,7 +528,7 @@ available_price_lists = (
     ["Brak"] + price_lists_df["title"].tolist() if not price_lists_df.empty else ["Brak"]
 )
 
-# --- ZAKŁADKI (Usunięto osobną zakładku 'Nowy klient') ---
+# --- ZAKŁADKI ---
 tab_home, tab_new_visit, tab_visits, tab_clients, tab_products, tab_excel, tab_pl = st.tabs(
     [
         "🏠 Strona główna",
@@ -540,11 +537,11 @@ tab_home, tab_new_visit, tab_visits, tab_clients, tab_products, tab_excel, tab_p
         "👥 Klienci",
         "📦 Produkty",
         "📊 Raport Excel",
-        "🏷️ Cenniki",
+        "🏷️️ Cenniki",
     ]
 )
 
-# --- TAB HOME: STRONA GŁÓWNA Z WYSZUKIWARKĄ, ZADANIAMI I ZŁOTYMI KLIENTAMI ---
+# --- TAB HOME: STRONA GŁÓWNA ---
 with tab_home:
     st.subheader("🔍 Wyszukaj Klienta")
     
@@ -568,84 +565,136 @@ with tab_home:
     else:
         st.info("Baza klientów jest pusta. Dodaj pierwszego klienta w zakładce 'Klienci' (opcja ➕ Nowy klient).")
 
-    # --- SEKCJA: NOTATKI / ZADANIA (TO-DO) ---
+    # --- SEKCJA: NOTATKI / ZADANIA (TO-DO) Z HISTORIĄ ---
     st.markdown("---")
-    st.subheader("📌 Zadania i Notatki (To-Do)")
-
-    with st.expander("➕ Dodaj nowe zadanie"):
-        with st.form("new_task_form", clear_on_submit=True):
-            t_title = st.text_input("Tytuł zadania / krótkie polecenie *", placeholder="Np. Oddzwonić w sprawie reklamacji do sklepu X")
-            t_desc = st.text_area("Szczegóły / Opis zadania (opcjonalnie)", placeholder="Dodatkowe informacje...")
-            t_due = st.date_input("Termin realizacji", datetime.now())
-            submit_task = st.form_submit_button("💾 Zapisz zadanie")
-
-            if submit_task and t_title:
-                now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-                due_str = t_due.strftime("%Y-%m-%d")
-                initial_update = f"[{now_str}] Utworzono zadanie."
-                
-                c.execute(
-                    """
-                    INSERT INTO tasks (title, description, due_date, status, updates, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (t_title, t_desc if t_desc.strip() else None, due_str, "Do zrobienia", initial_update, now_str)
-                )
-                conn.commit()
-                st.success("Dodano nowe zadanie!")
-                st.rerun()
-
-    # Pobranie aktywnych zadań
-    df_tasks = pd.read_sql_query("SELECT * FROM tasks WHERE status != 'Zrobione' ORDER BY due_date ASC, id DESC", conn)
-
-    if not df_tasks.empty:
-        st.caption("Rozwiń zadanie, aby dopisać aktualizację lub je oznaczyć jako wykonane:")
-        for _, task_row in df_tasks.iterrows():
-            t_id = task_row["id"]
-            t_title_str = task_row["title"]
-            t_due_date = task_row["due_date"]
+    
+    # Nagłówek sekcji z odnośnikiem / przyciskiem "Historia zadań" po prawej stronie
+    col_t_title, col_t_link = st.columns([3, 1])
+    with col_t_title:
+        st.subheader("📌 Zadania i Notatki (To-Do)")
+    with col_t_link:
+        if "show_task_history" not in st.session_state:
+            st.session_state["show_task_history"] = False
             
-            with st.expander(f"📌 {t_title_str} (Termin: {t_due_date})"):
-                if task_row["description"]:
-                    st.markdown(f"**Opis:** {task_row['description']}")
-                
-                st.markdown("---")
-                st.markdown("**🔄 Historia / Aktualizacje:**")
-                if task_row["updates"]:
-                    for upd_line in task_row["updates"].split("\n"):
-                        if upd_line.strip():
-                            st.write(f"• {upd_line}")
-                else:
-                    st.caption("Brak wpisanych aktualizacji.")
+        history_btn_label = "🔙 Powrót do zadań" if st.session_state["show_task_history"] else "📜 Historia zadań"
+        if st.button(history_btn_label, key="toggle_task_history_btn"):
+            st.session_state["show_task_history"] = not st.session_state["show_task_history"]
+            st.rerun()
 
-                st.markdown("---")
-                new_upd_text = st.text_input("Dopisz nową aktualizację co się wydarzyło:", key=f"upd_input_{t_id}", placeholder="Np. Klient prosił o telefon w poniedziałek")
-                
-                col_btn_upd, col_btn_done = st.columns(2)
-                with col_btn_upd:
-                    if st.button("➕ Dodaj aktualizację", key=f"btn_add_upd_{t_id}"):
-                        if new_upd_text.strip():
-                            now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-                            formatted_update = f"[{now_str}] {new_upd_text.strip()}"
-                            
-                            existing_updates = task_row["updates"] if task_row["updates"] else ""
-                            updated_history = f"{existing_updates}\n{formatted_update}".strip()
-                            
-                            c.execute("UPDATE tasks SET updates = ? WHERE id = ?", (updated_history, t_id))
+    # Jeśli włączony widok historii zadań
+    if st.session_state["show_task_history"]:
+        st.markdown("#### 📜 Archiwum / Historia zadań")
+        st.caption("Wszystkie zadania zapisane w systemie (bieżące oraz ukończone):")
+        
+        df_all_tasks_history = pd.read_sql_query("SELECT * FROM tasks ORDER BY due_date DESC, id DESC", conn)
+        
+        if not df_all_tasks_history.empty:
+            for _, h_row in df_all_tasks_history.iterrows():
+                h_status = h_row["status"]
+                h_status_icon = "✅" if h_status == "Zrobione" else "📌"
+                with st.expander(f"{h_status_icon} {h_row['title']} (Termin: {h_row['due_date']}) — [{h_status}]"):
+                    if h_row["description"]:
+                        st.markdown(f"**Opis:** {h_row['description']}")
+                    st.markdown(f"**Utworzono:** {h_row['created_at']}")
+                    st.markdown("---")
+                    st.markdown("**🔄 Historia / Aktualizacje:**")
+                    if h_row["updates"]:
+                        for upd_line in h_row["updates"].split("\n"):
+                            if upd_line.strip():
+                                st.write(f"• {upd_line}")
+                    else:
+                        st.caption("Brak wpisanych aktualizacji.")
+                        
+                    st.markdown("---")
+                    confirm_del_task = st.checkbox(f"Potwierdź usunięcie zadania z archiwum", key=f"conf_del_hist_{h_row['id']}")
+                    if st.button("🗑️ Usuń trwale zadanie", key=f"del_hist_btn_{h_row['id']}", type="primary"):
+                        if confirm_del_task:
+                            c.execute("DELETE FROM tasks WHERE id = ?", (h_row['id'],))
                             conn.commit()
-                            st.success("Dopisano aktualizację!")
+                            st.success("Usunięto zadanie z bazy!")
                             st.rerun()
                         else:
-                            st.warning("Wpisz treść aktualizacji.")
-
-                with col_btn_done:
-                    if st.button("✅ Oznacz jako zrobione", key=f"btn_done_{t_id}", type="primary"):
-                        c.execute("DELETE FROM tasks WHERE id = ?", (t_id,))
-                        conn.commit()
-                        st.success("Zadanie ukończone i usunięte z listy!")
-                        st.rerun()
+                            st.warning("Zaznacz pole potwierdzenia.")
+        else:
+            st.info("Brak jakichkolwiek zadań w historii.")
+            
     else:
-        st.info("Brak aktywnych zadań. Dodaj nowe za pomocą przycisku powyżej.")
+        # Standardowy widok zadań aktywnych
+        with st.expander("➕ Dodaj nowe zadanie"):
+            with st.form("new_task_form", clear_on_submit=True):
+                t_title = st.text_input("Tytuł zadania / krótkie polecenie *", placeholder="Np. Oddzwonić w sprawie reklamacji do sklepu X")
+                t_desc = st.text_area("Szczegóły / Opis zadania (opcjonalnie)", placeholder="Dodatkowe informacje...")
+                t_due = st.date_input("Termin realizacji", datetime.now())
+                submit_task = st.form_submit_button("💾 Zapisz zadanie")
+
+                if submit_task and t_title:
+                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+                    due_str = t_due.strftime("%Y-%m-%d")
+                    initial_update = f"[{now_str}] Utworzono zadanie."
+                    
+                    c.execute(
+                        """
+                        INSERT INTO tasks (title, description, due_date, status, updates, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (t_title, t_desc if t_desc.strip() else None, due_str, "Do zrobienia", initial_update, now_str)
+                    )
+                    conn.commit()
+                    st.success("Dodano nowe zadanie!")
+                    st.rerun()
+
+        # Pobranie aktywnych zadań
+        df_tasks = pd.read_sql_query("SELECT * FROM tasks WHERE status != 'Zrobione' ORDER BY due_date ASC, id DESC", conn)
+
+        if not df_tasks.empty:
+            st.caption("Rozwiń zadanie, aby dopisać aktualizację lub je oznaczyć jako wykonane:")
+            for _, task_row in df_tasks.iterrows():
+                t_id = task_row["id"]
+                t_title_str = task_row["title"]
+                t_due_date = task_row["due_date"]
+                
+                with st.expander(f"📌 {t_title_str} (Termin: {t_due_date})"):
+                    if task_row["description"]:
+                        st.markdown(f"**Opis:** {task_row['description']}")
+                    
+                    st.markdown("---")
+                    st.markdown("**🔄 Historia / Aktualizacje:**")
+                    if task_row["updates"]:
+                        for upd_line in task_row["updates"].split("\n"):
+                            if upd_line.strip():
+                                st.write(f"• {upd_line}")
+                    else:
+                        st.caption("Brak wpisanych aktualizacji.")
+
+                    st.markdown("---")
+                    new_upd_text = st.text_input("Dopisz nową aktualizację co się wydarzyło:", key=f"upd_input_{t_id}", placeholder="Np. Klient prosił o telefon w poniedziałek")
+                    
+                    col_btn_upd, col_btn_done = st.columns(2)
+                    with col_btn_upd:
+                        if st.button("➕ Dodaj aktualizację", key=f"btn_add_upd_{t_id}"):
+                            if new_upd_text.strip():
+                                now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+                                formatted_update = f"[{now_str}] {new_upd_text.strip()}"
+                                
+                                existing_updates = task_row["updates"] if task_row["updates"] else ""
+                                updated_history = f"{existing_updates}\n{formatted_update}".strip()
+                                
+                                c.execute("UPDATE tasks SET updates = ? WHERE id = ?", (updated_history, t_id))
+                                conn.commit()
+                                st.success("Dopisano aktualizację!")
+                                st.rerun()
+                            else:
+                                st.warning("Wpisz treść aktualizacji.")
+
+                    with col_btn_done:
+                        if st.button("✅ Oznacz jako zrobione", key=f"btn_done_{t_id}", type="primary"):
+                            # Zamiast usuwać, zmieniamy status na 'Zrobione', aby zachować w historii
+                            c.execute("UPDATE tasks SET status = 'Zrobione' WHERE id = ?", (t_id,))
+                            conn.commit()
+                            st.success("Zadanie ukończone i przeniesione do historii!")
+                            st.rerun()
+        else:
+            st.info("Brak aktywnych zadań. Dodaj nowe za pomocą przycisku powyżej.")
 
     # --- SEKCJA: ZŁOCI KLIENCI POSORTOWANI OD NAJDAWNIEJSZEJ WIZYTY ---
     st.markdown("---")
@@ -780,7 +829,7 @@ with tab_new_visit:
     else:
         st.warning("Najpierw dodaj klienta w zakładce 'Klienci' (opcja ➕ Nowy klient)!")
 
-# --- TAB 3: WIZYTY (CHRONOLOGICZNA LISTA ROZWIJANA) ---
+# --- TAB 3: WIZYTY ---
 with tab_visits:
     st.subheader("📋 Historia Wszystkich Wizyt")
     st.caption("Chronologiczna lista ostatnich wizyt u klientów:")
@@ -816,7 +865,7 @@ with tab_visits:
 
                 st.markdown("---")
                 confirm_del_v = st.checkbox(f"Potwierdzam usunięcie tej wizyty", key=f"tab_vis_conf_{v_id}")
-                if st.button("🗑️ Usuń tę wizytę", key=f"tab_vis_btn_{v_id}", type="primary"):
+                if st.button("🗑️️ Usuń tę wizytę", key=f"tab_vis_btn_{v_id}", type="primary"):
                     if confirm_del_v:
                         c.execute("DELETE FROM visits WHERE id = ?", (v_id,))
                         
@@ -832,9 +881,8 @@ with tab_visits:
     else:
         st.info("Brak zarejestrowanych wizyt w systemie.")
 
-# --- TAB 4: LISTA KLIENTÓW (WRAZ Z DODANIEM NOWEGO KLIENTA POD PLUSIKIEM) ---
+# --- TAB 4: LISTA KLIENTÓW ---
 with tab_clients:
-    # --- ROZWIJANY PANEL: DODAWANIE NOWEGO KLIENTA ---
     with st.expander("➕ Nowy klient", expanded=False):
         st.subheader("👤 Zgłaszanie nowych klientów")
 
@@ -980,7 +1028,6 @@ with tab_clients:
 
     st.markdown("---")
     
-    # --- WŁAŚCIWA LISTA KLIENTÓW ---
     df = pd.read_sql_query("SELECT * FROM clients", conn)
 
     if not df.empty:
@@ -1276,7 +1323,6 @@ with tab_products:
         start_anal_str = f"{anal_year:04d}-{anal_month:02d}-01"
         end_anal_str = f"{anal_year:04d}-{anal_month:02d}-{last_d_anal:02d}"
 
-        # Pobieramy zakupy w zadanym przedziale miesięcznym
         query_anal = """
             SELECT item_name, 
                    SUM(bought_qty) as total_bought_qty, 
@@ -1413,7 +1459,6 @@ with tab_excel:
 
                         net_item_val = b_val - r_val
 
-                        # 1. Zapis pozycji zakupowej / asortymentowej z pliku
                         c.execute(
                             """
                             INSERT INTO purchases (
@@ -1436,7 +1481,6 @@ with tab_excel:
                             ),
                         )
 
-                        # 2. Automatyczne wykrywanie i zaciąganie produktów do globalnego katalogu produktów
                         if item_name and item_name != "Ogólne":
                             c.execute("SELECT COUNT(*) FROM products WHERE name = ?", (item_name,))
                             if c.fetchone()[0] == 0:
@@ -1447,7 +1491,6 @@ with tab_excel:
                                 )
                                 new_products_added += 1
 
-                        # 3. Sprawdzenie i automatyczne dodanie klienta (jako "Nowy klient" w podgrupie)
                         c.execute(
                             "SELECT COUNT(*) FROM clients WHERE name = ?",
                             (client_name,),
