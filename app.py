@@ -129,12 +129,17 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(
     ]
 )
 
+# Pobranie listy cenników do wykorzystania w edycji i tworzeniu
+price_lists_df = pd.read_sql_query("SELECT title FROM price_lists", conn)
+available_price_lists = (
+    ["Brak"] + price_lists_df["title"].tolist() if not price_lists_df.empty else ["Brak"]
+)
+
 # --- TAB 1: LISTA KLIENTÓW ---
 with tab1:
     df = pd.read_sql_query("SELECT * FROM clients", conn)
 
     if not df.empty:
-        # BEZPIECZNA KONWERSJA DATY (NAPRAWA BŁĘDU ATTRIBUTEERROR)
         df["last_visit_clean"] = pd.to_datetime(df["last_visit"], errors="coerce")
         today = pd.to_datetime("today")
         df["Dni od wizyty"] = (today - df["last_visit_clean"]).dt.days.fillna(0).astype(int)
@@ -177,7 +182,7 @@ with tab1:
                     f"**Przypisany cennik:** 🏷️ `{row['price_list'] if row['price_list'] else 'Brak'}`"
                 )
 
-                if row["price_list"]:
+                if row["price_list"] and row["price_list"] != "Brak":
                     c.execute(
                         "SELECT details FROM price_lists WHERE title = ?",
                         (row["price_list"],),
@@ -187,6 +192,47 @@ with tab1:
                         with st.popover("👁️ Pokaż cennik"):
                             st.caption(f"Cennik: {row['price_list']}")
                             st.text(pl_res[0])
+
+                # --- SEKCJA EDYCYJNA KARTOTEKI KLIENTA ---
+                with st.popover("✏️ Edytuj dane klienta"):
+                    st.markdown(f"#### Edycja: {row['name']}")
+                    with st.form(key=f"edit_form_{row['id']}"):
+                        new_name = st.text_input("Nazwa klienta", value=row["name"])
+                        
+                        cat_options = ["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"]
+                        cat_idx = cat_options.index(row["category"]) if row["category"] in cat_options else 0
+                        new_cat = st.selectbox("Priorytet", cat_options, index=cat_idx)
+                        
+                        new_phone = st.text_input("Telefon", value=row["phone"] or "")
+                        new_email = st.text_input("E-mail", value=row["email"] or "")
+                        new_address = st.text_input("Adres", value=row["address"] or "")
+                        
+                        current_pl = row["price_list"] if row["price_list"] in available_price_lists else "Brak"
+                        pl_idx = available_price_lists.index(current_pl) if current_pl in available_price_lists else 0
+                        new_pl = st.selectbox("Cennik", available_price_lists, index=pl_idx)
+
+                        save_changes = st.form_submit_button("💾 Zapisz zmiany")
+
+                        if save_changes:
+                            try:
+                                # Aktualizacja zakupów, zamówień i bazy klientów w przypadku zmiany nazwy
+                                if new_name != row["name"]:
+                                    c.execute("UPDATE purchases SET client_name = ? WHERE client_name = ?", (new_name, row["name"]))
+                                    c.execute("UPDATE orders SET client_name = ? WHERE client_name = ?", (new_name, row["name"]))
+                                
+                                c.execute(
+                                    """
+                                    UPDATE clients 
+                                    SET name = ?, category = ?, phone = ?, email = ?, address = ?, price_list = ?
+                                    WHERE id = ?
+                                    """,
+                                    (new_name, new_cat, new_phone, new_email, new_address, new_pl if new_pl != "Brak" else None, row["id"])
+                                )
+                                conn.commit()
+                                st.success("Pomyślnie zaktualizowano dane klienta!")
+                                st.rerun()
+                            except sqlite3.IntegrityError:
+                                st.error("Klient o takiej nazwie już istnieje!")
 
                 st.markdown("---")
                 st.markdown("📈 **Statystyki zakupy/zwroty:**")
@@ -480,11 +526,6 @@ with tab3:
 with tab4:
     st.subheader("Formularz nowego klienta")
 
-    price_lists_df = pd.read_sql_query("SELECT title FROM price_lists", conn)
-    available_price_lists = (
-        price_lists_df["title"].tolist() if not price_lists_df.empty else []
-    )
-
     with st.form("add_client_form", clear_on_submit=True):
         name = st.text_input("Nazwa firmy / Imię i nazwisko *")
         category = st.selectbox(
@@ -524,7 +565,7 @@ with tab4:
                         phone,
                         email,
                         address,
-                        selected_price_list,
+                        selected_price_list if selected_price_list != "Brak" else None,
                         first_visit_str,
                         initial_note,
                     ),
