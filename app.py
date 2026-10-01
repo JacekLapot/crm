@@ -338,7 +338,7 @@ def render_client_card(row, key_prefix="card"):
         c.execute("SELECT details FROM price_lists WHERE title = ?", (row["price_list"],))
         pl_res = c.fetchone()
         if pl_res:
-            with st.popover("👁️️ Pokaż cennik", key=f"{key_prefix}_pl_{row['id']}"):
+            with st.popover("👁 Pokaż cennik", key=f"{key_prefix}_pl_{row['id']}"):
                 st.caption(f"Cennik: {row['price_list']}")
                 st.text(pl_res[0])
 
@@ -531,8 +531,8 @@ available_price_lists = (
     ["Brak"] + price_lists_df["title"].tolist() if not price_lists_df.empty else ["Brak"]
 )
 
-# --- ZAKŁADKI ---
-tab_home, tab_new_visit, tab_visits, tab_clients, tab_products, tab_excel, tab_new_client, tab_pl = st.tabs(
+# --- ZAKŁADKI (Usunięto osobną zakładku 'Nowy klient') ---
+tab_home, tab_new_visit, tab_visits, tab_clients, tab_products, tab_excel, tab_pl = st.tabs(
     [
         "🏠 Strona główna",
         "➕ Nowa wizyta",
@@ -540,7 +540,6 @@ tab_home, tab_new_visit, tab_visits, tab_clients, tab_products, tab_excel, tab_n
         "👥 Klienci",
         "📦 Produkty",
         "📊 Raport Excel",
-        "👤 Nowy klient",
         "🏷️ Cenniki",
     ]
 )
@@ -567,7 +566,7 @@ with tab_home:
         else:
             st.info("💡 Wpisz nazwę klienta w polu powyżej, aby wywołać jego kartotekę.")
     else:
-        st.info("Baza klientów jest pusta. Dodaj pierwszego klienta w zakładce 'Nowy klient'.")
+        st.info("Baza klientów jest pusta. Dodaj pierwszego klienta w zakładce 'Klienci' (opcja ➕ Nowy klient).")
 
     # --- SEKCJA: NOTATKI / ZADANIA (TO-DO) ---
     st.markdown("---")
@@ -779,7 +778,7 @@ with tab_new_visit:
                 conn.commit()
                 st.rerun()
     else:
-        st.warning("Najpierw dodaj klienta w zakładce 'Nowy klient'!")
+        st.warning("Najpierw dodaj klienta w zakładce 'Klienci' (opcja ➕ Nowy klient)!")
 
 # --- TAB 3: WIZYTY (CHRONOLOGICZNA LISTA ROZWIJANA) ---
 with tab_visits:
@@ -833,8 +832,155 @@ with tab_visits:
     else:
         st.info("Brak zarejestrowanych wizyt w systemie.")
 
-# --- TAB 4: LISTA KLIENTÓW ---
+# --- TAB 4: LISTA KLIENTÓW (WRAZ Z DODANIEM NOWEGO KLIENTA POD PLUSIKIEM) ---
 with tab_clients:
+    # --- ROZWIJANY PANEL: DODAWANIE NOWEGO KLIENTA ---
+    with st.expander("➕ Nowy klient", expanded=False):
+        st.subheader("👤 Zgłaszanie nowych klientów")
+
+        mode = st.radio("Wybierz sposób dodania:", ["Wpis ręczny (jeden klient)", "📥 Masowy import z pliku Excel"], horizontal=True)
+
+        if mode == "Wpis ręczny (jeden klient)":
+            with st.form("add_client_form", clear_on_submit=True):
+                name = st.text_input("Nazwa firmy / Imię i nazwisko *")
+                chain_name = st.text_input("Nazwa sieci (opcjonalnie)", placeholder="np. Społem, Lewiatan, Biedronka")
+                category = st.selectbox(
+                    "Początkowa kategoria / Scoring", ["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"]
+                )
+                sub_category = st.selectbox(
+                    "Podgrupa", ["Nowy klient", "Standardowy"]
+                )
+
+                st.markdown("---")
+                st.markdown("📞 **Dane kontaktowe i lokalizacja (opcjonalnie)**")
+                phone = st.text_area(
+                    "Numery telefonów (Wpisz w osobnych liniach)",
+                    placeholder="Jan (Właściciel): 600111222\nKierownik: 600333444",
+                    height=100
+                )
+                email = st.text_input("Adres e-mail", placeholder="np. sklep@klient.pl")
+                address = st.text_input(
+                    "Adres / Lokalizacja (do nawigacji)", placeholder="np. ul. Sienkiewicza 10, Kielce"
+                )
+
+                st.markdown("---")
+                selected_price_list = st.selectbox(
+                    "Przypisz cennik", available_price_lists
+                )
+                submit_new = st.form_submit_button("Dodaj do bazy")
+
+                if submit_new and name:
+                    try:
+                        c.execute(
+                            """
+                            INSERT INTO clients (name, category, sub_category, chain_name, phone, email, address, price_list) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                name,
+                                category,
+                                sub_category,
+                                chain_name,
+                                phone,
+                                email,
+                                address,
+                                selected_price_list if selected_price_list != "Brak" else None,
+                            ),
+                        )
+                        conn.commit()
+                        st.success(f"Dodano klienta: {name} (Podgrupa: {sub_category})")
+                        st.rerun()
+                    except sqlite3.IntegrityError:
+                        st.error("Klient o takiej nazwie już istnieje!")
+
+        else:
+            st.markdown("#### 📁 Wczytaj plik Excel z bazą klientów")
+            client_file = st.file_uploader(
+                "Wybierz plik z kartotekami (.xlsx lub .xls)", type=["xlsx", "xls"], key="excel_clients"
+            )
+
+            if client_file is not None:
+                try:
+                    c_df = pd.read_excel(client_file)
+                    st.write("Podgląd arkusza:")
+                    st.dataframe(c_df.head(5), use_container_width=True)
+
+                    st.markdown("#### Mapowanie kolumn z Excela na dane w CRM:")
+                    excel_cols = ["-- Brak / Nie przypisuj --"] + list(c_df.columns)
+
+                    col_x, col_y = st.columns(2)
+                    with col_x:
+                        col_name = st.selectbox("Nazwa Klienta / Firmy *", list(c_df.columns))
+                        col_chain = st.selectbox("Nazwa sieci", excel_cols)
+                        col_cat = st.selectbox("Priorytet / Kategoria", excel_cols)
+                        col_sub = st.selectbox("Podgrupa (np. Nowy klient)", excel_cols)
+                    with col_y:
+                        col_phone = st.selectbox("Numer telefonu", excel_cols)
+                        col_email = st.selectbox("E-mail", excel_cols)
+                        col_addr = st.selectbox("Adres", excel_cols)
+                        col_pl = st.selectbox("Cennik", excel_cols)
+
+                    if st.button("🚀 Utwórz kartoteki klientów"):
+                        added_cnt = 0
+                        updated_cnt = 0
+
+                        for _, r in c_df.iterrows():
+                            c_name = str(r[col_name]).strip()
+                            if not c_name or c_name == "nan":
+                                continue
+
+                            c_chain = str(r[col_chain]).strip() if col_chain != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_chain]) else None
+
+                            c_cat = str(r[col_cat]).strip() if col_cat != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_cat]) else "🥉 Brązowy"
+                            if c_cat not in ["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"]:
+                                c_cat = "🥉 Brązowy"
+
+                            c_sub = str(r[col_sub]).strip() if col_sub != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_sub]) else "Nowy klient"
+
+                            c_phone = str(r[col_phone]).strip() if col_phone != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_phone]) else None
+                            c_email = str(r[col_email]).strip() if col_email != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_email]) else None
+                            c_addr = str(r[col_addr]).strip() if col_addr != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_addr]) else None
+                            c_pl = str(r[col_pl]).strip() if col_pl != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_pl]) else None
+
+                            c.execute("SELECT COUNT(*) FROM clients WHERE name = ?", (c_name,))
+                            exists = c.fetchone()[0] > 0
+
+                            if exists:
+                                c.execute(
+                                    """
+                                    UPDATE clients 
+                                    SET category = COALESCE(?, category),
+                                        sub_category = COALESCE(?, sub_category),
+                                        chain_name = COALESCE(?, chain_name),
+                                        phone = COALESCE(?, phone),
+                                        email = COALESCE(?, email),
+                                        address = COALESCE(?, address),
+                                        price_list = COALESCE(?, price_list)
+                                    WHERE name = ?
+                                    """,
+                                    (c_cat, c_sub, c_chain, c_phone, c_email, c_addr, c_pl, c_name)
+                                )
+                                updated_cnt += 1
+                            else:
+                                c.execute(
+                                    """
+                                    INSERT INTO clients (name, category, sub_category, chain_name, phone, email, address, price_list)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                    """,
+                                    (c_name, c_cat, c_sub, c_chain, c_phone, c_email, c_addr, c_pl)
+                                )
+                                added_cnt += 1
+
+                        conn.commit()
+                        st.success(f"Gotowe! Dodano {added_cnt} nowych kartotek, zaktualizowano {updated_cnt} istniejących.")
+                        st.rerun()
+
+                except Exception as ex:
+                    st.error(f"Błąd podczas odczytu pliku: {ex}")
+
+    st.markdown("---")
+    
+    # --- WŁAŚCIWA LISTA KLIENTÓW ---
     df = pd.read_sql_query("SELECT * FROM clients", conn)
 
     if not df.empty:
@@ -945,7 +1091,7 @@ with tab_clients:
                 render_client_card(row, key_prefix="list")
 
     else:
-        st.info("Baza jest pusta. Dodaj pierwszego klienta.")
+        st.info("Baza jest pusta. Dodaj pierwszego klienta używając przycisku '➕ Nowy klient' powyżej.")
 
 # --- TAB 5: PRODUKTY ---
 with tab_products:
@@ -1352,151 +1498,7 @@ with tab_excel:
         except Exception as e:
             st.error(f"Błąd podczas odczytu pliku Excel: {e}")
 
-# --- TAB 7: DODAJ NOWEGO KLIENTA ---
-with tab_new_client:
-    st.subheader("👤 Zgłaszanie nowych klientów (podgrupa w Klienci)")
-
-    mode = st.radio("Wybierz sposób dodania:", ["Wpis ręczny (jeden klient)", "📥 Masowy import z pliku Excel"], horizontal=True)
-
-    if mode == "Wpis ręczny (jeden klient)":
-        with st.form("add_client_form", clear_on_submit=True):
-            name = st.text_input("Nazwa firmy / Imię i nazwisko *")
-            chain_name = st.text_input("Nazwa sieci (opcjonalnie)", placeholder="np. Społem, Lewiatan, Biedronka")
-            category = st.selectbox(
-                "Początkowa kategoria / Scoring", ["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"]
-            )
-            sub_category = st.selectbox(
-                "Podgrupa", ["Nowy klient", "Standardowy"]
-            )
-
-            st.markdown("---")
-            st.markdown("📞 **Dane kontaktowe i lokalizacja (opcjonalnie)**")
-            phone = st.text_area(
-                "Numery telefonów (Wpisz w osobnych liniach)",
-                placeholder="Jan (Właściciel): 600111222\nKierownik: 600333444",
-                height=100
-            )
-            email = st.text_input("Adres e-mail", placeholder="np. sklep@klient.pl")
-            address = st.text_input(
-                "Adres / Lokalizacja (do nawigacji)", placeholder="np. ul. Sienkiewicza 10, Kielce"
-            )
-
-            st.markdown("---")
-            selected_price_list = st.selectbox(
-                "Przypisz cennik", available_price_lists
-            )
-            submit_new = st.form_submit_button("Dodaj do bazy")
-
-            if submit_new and name:
-                try:
-                    c.execute(
-                        """
-                        INSERT INTO clients (name, category, sub_category, chain_name, phone, email, address, price_list) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            name,
-                            category,
-                            sub_category,
-                            chain_name,
-                            phone,
-                            email,
-                            address,
-                            selected_price_list if selected_price_list != "Brak" else None,
-                        ),
-                    )
-                    conn.commit()
-                    st.success(f"Dodano klienta: {name} (Podgrupa: {sub_category})")
-                    st.rerun()
-                except sqlite3.IntegrityError:
-                    st.error("Klient o takiej nazwie już istnieje!")
-
-    else:
-        st.markdown("#### 📁 Wczytaj plik Excel z bazą klientów")
-        client_file = st.file_uploader(
-            "Wybierz plik z kartotekami (.xlsx lub .xls)", type=["xlsx", "xls"], key="excel_clients"
-        )
-
-        if client_file is not None:
-            try:
-                c_df = pd.read_excel(client_file)
-                st.write("Podgląd arkusza:")
-                st.dataframe(c_df.head(5), use_container_width=True)
-
-                st.markdown("#### Mapowanie kolumn z Excela na dane w CRM:")
-                excel_cols = ["-- Brak / Nie przypisuj --"] + list(c_df.columns)
-
-                col_x, col_y = st.columns(2)
-                with col_x:
-                    col_name = st.selectbox("Nazwa Klienta / Firmy *", list(c_df.columns))
-                    col_chain = st.selectbox("Nazwa sieci", excel_cols)
-                    col_cat = st.selectbox("Priorytet / Kategoria", excel_cols)
-                    col_sub = st.selectbox("Podgrupa (np. Nowy klient)", excel_cols)
-                with col_y:
-                    col_phone = st.selectbox("Numer telefonu", excel_cols)
-                    col_email = st.selectbox("E-mail", excel_cols)
-                    col_addr = st.selectbox("Adres", excel_cols)
-                    col_pl = st.selectbox("Cennik", excel_cols)
-
-                if st.button("🚀 Utwórz kartoteki klientów"):
-                    added_cnt = 0
-                    updated_cnt = 0
-
-                    for _, r in c_df.iterrows():
-                        c_name = str(r[col_name]).strip()
-                        if not c_name or c_name == "nan":
-                            continue
-
-                        c_chain = str(r[col_chain]).strip() if col_chain != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_chain]) else None
-
-                        c_cat = str(r[col_cat]).strip() if col_cat != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_cat]) else "🥉 Brązowy"
-                        if c_cat not in ["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"]:
-                            c_cat = "🥉 Brązowy"
-
-                        c_sub = str(r[col_sub]).strip() if col_sub != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_sub]) else "Nowy klient"
-
-                        c_phone = str(r[col_phone]).strip() if col_phone != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_phone]) else None
-                        c_email = str(r[col_email]).strip() if col_email != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_email]) else None
-                        c_addr = str(r[col_addr]).strip() if col_addr != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_addr]) else None
-                        c_pl = str(r[col_pl]).strip() if col_pl != "-- Brak / Nie przypisuj --" and pd.notnull(r[col_pl]) else None
-
-                        c.execute("SELECT COUNT(*) FROM clients WHERE name = ?", (c_name,))
-                        exists = c.fetchone()[0] > 0
-
-                        if exists:
-                            c.execute(
-                                """
-                                UPDATE clients 
-                                SET category = COALESCE(?, category),
-                                    sub_category = COALESCE(?, sub_category),
-                                    chain_name = COALESCE(?, chain_name),
-                                    phone = COALESCE(?, phone),
-                                    email = COALESCE(?, email),
-                                    address = COALESCE(?, address),
-                                    price_list = COALESCE(?, price_list)
-                                WHERE name = ?
-                                """,
-                                (c_cat, c_sub, c_chain, c_phone, c_email, c_addr, c_pl, c_name)
-                            )
-                            updated_cnt += 1
-                        else:
-                            c.execute(
-                                """
-                                INSERT INTO clients (name, category, sub_category, chain_name, phone, email, address, price_list)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                                """,
-                                (c_name, c_cat, c_sub, c_chain, c_phone, c_email, c_addr, c_pl)
-                            )
-                            added_cnt += 1
-
-                    conn.commit()
-                    st.success(f"Gotowe! Dodano {added_cnt} nowych kartotek, zaktualizowano {updated_cnt} istniejących.")
-                    st.rerun()
-
-            except Exception as ex:
-                st.error(f"Błąd podczas odczytu pliku: {ex}")
-
-# --- TAB 8: ZARZĄDZANIE CENNIKAMI ---
+# --- TAB 7: ZARZĄDZANIE CENNIKAMI ---
 with tab_pl:
     st.subheader("🏷️ Przegląd i dodawanie cenników")
 
