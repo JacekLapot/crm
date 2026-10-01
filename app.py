@@ -230,7 +230,6 @@ def recalculate_client_scores():
     all_clients = c.fetchall()
     
     for (cl_name,) in all_clients:
-        # Sumujemy wartość netto (zakupy minus zwroty) z ostatnich 30 dni lub ogółem
         date_limit = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
         c.execute(
             "SELECT SUM(net_val) FROM purchases WHERE client_name = ? AND report_date >= ?",
@@ -239,13 +238,11 @@ def recalculate_client_scores():
         res = c.fetchone()[0]
         monthly_val = res if res is not None else 0.0
         
-        # Jeśli brak danych z ostatnich 30 dni, bierzemy ogólną średnią lub wartość z bazy
         if monthly_val == 0.0:
             c.execute("SELECT net_val FROM clients WHERE name = ?", (cl_name,))
             r_net = c.fetchone()
             monthly_val = r_net[0] if r_net and r_net[0] else 0.0
 
-        # Nowe progi scoringu
         if monthly_val >= 7800.0:
             new_cat = "🥇 Złoty"
         elif monthly_val >= 3900.0:
@@ -273,7 +270,6 @@ def render_client_card(row, key_prefix="card"):
     st.markdown(f"### {color} {row['name']}{chain_str} ({row['category']})")
     st.caption(f"Ostatnia wizyta: {row['last_visit'] if row['last_visit'] else 'Brak'} ({days_str})")
 
-    # Dane kontaktowe i nawigacja
     st.markdown("📞 **Dane kontaktowe i lokalizacja:**")
     if row.get("chain_name"):
         st.write(f"• **Nazwa sieci:** {row['chain_name']}")
@@ -295,7 +291,6 @@ def render_client_card(row, key_prefix="card"):
     
     if row["address"]:
         st.write(f"• **Adres:** {row['address']}")
-        # Przycisk nawigacji (Geolokalizacja / Google Maps)
         encoded_address = urllib.parse.quote(row['address'])
         map_url = f"https://www.google.com/maps/search/?api=1&query={encoded_address}"
         st.markdown(f"🚗 [Otwórz trasę w mapach Google]({map_url})", unsafe_allow_html=True)
@@ -315,7 +310,6 @@ def render_client_card(row, key_prefix="card"):
                 st.caption(f"Cennik: {row['price_list']}")
                 st.text(pl_res[0])
 
-    # SEKCJA EDYCYJNA I USUWANIE
     with st.popover("✏️ Edytuj / Usuń klienta", key=f"{key_prefix}_edit_{row['id']}"):
         st.markdown(f"#### Edycja: {row['name']}")
         with st.form(key=f"{key_prefix}_edit_form_{row['id']}"):
@@ -437,7 +431,6 @@ def render_client_card(row, key_prefix="card"):
     else:
         st.caption("Brak danych o zakupach/zwrotach dla wybranego okresu.")
 
-    # HISTORIA WIZYT Z OPCJĄ USUNIĘCIA
     st.markdown("---")
     st.markdown("🗓️ **Historia wizyt i zamówień:**")
 
@@ -542,6 +535,15 @@ with tab1:
     df = pd.read_sql_query("SELECT * FROM clients", conn)
 
     if not df.empty:
+        # LICZNIK KLIENTÓW U GÓRY
+        total_count = len(df)
+        gold_count = len(df[df["category"] == "🥇 Złoty"])
+        silver_count = len(df[df["category"] == "🥈 Srebrny"])
+        bronze_count = len(df[df["category"] == "🥉 Brązowy"])
+
+        st.markdown(f"👥 **Liczba klientów ogółem:** `{total_count}` | 🥇 Złote: `{gold_count}` | 🥈 Srebrne: `{silver_count}` | 🥉 Brązowe: `{bronze_count}`")
+        st.markdown("---")
+
         # Przycisk automatycznego przeliczania scoringu (Złoty/Srebrny/Brązowy)
         if st.button("🔄 Przelicz scoring klientów wg obrotów"):
             recalculate_client_scores()
@@ -909,7 +911,6 @@ with tab3:
 
                     conn.commit()
                     
-                    # Automatyczne przeliczenie scoringu po wgraniu raportu
                     recalculate_client_scores()
 
                     st.success(
