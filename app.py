@@ -184,6 +184,21 @@ c.execute(
     )
 """
 )
+
+# Tabela zadań (To-Do) z aktualizacjami
+c.execute(
+    """
+    CREATE TABLE IF NOT EXISTS tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        description TEXT,
+        due_date DATE,
+        status TEXT DEFAULT 'Do zrobienia',
+        updates TEXT,
+        created_at DATETIME
+    )
+"""
+)
 conn.commit()
 
 # Migracja kolumn dla istniejących baz
@@ -479,7 +494,7 @@ def render_client_card(row, key_prefix="card"):
         st.caption("Brak zarejestrowanych wizyt dla tego klienta.")
 
 
-st.title("🍞 Chlebownik")
+st.title("📱 Mobilny CRM")
 
 # Przycisk wylogowania w panelu bocznym
 with st.sidebar:
@@ -507,7 +522,7 @@ tab_home, tab_new_visit, tab_visits, tab_clients, tab_excel, tab_new_client, tab
     ]
 )
 
-# --- TAB HOME: STRONA GŁÓWNA Z WYSZUKIWARKĄ I ZŁOTYMI KLIENTAMI ---
+# --- TAB HOME: STRONA GŁÓWNA Z WYSZUKIWARKĄ, ZADANIAMI I ZŁOTYMI KLIENTAMI ---
 with tab_home:
     st.subheader("🔍 Wyszukaj Klienta")
     
@@ -531,7 +546,86 @@ with tab_home:
     else:
         st.info("Baza klientów jest pusta. Dodaj pierwszego klienta w zakładce 'Nowy klient'.")
 
-    # --- DODANA SEKCJA: ZŁOCI KLIENCI POSORTOWANI OD NAJDAWNIEJSZEJ WIZYTY ---
+    # --- NOWA SEKCJA: NOTATKI / ZADANIA (TO-DO) ---
+    st.markdown("---")
+    st.subheader("📌 Zadania i Notatki (To-Do)")
+
+    with st.expander("➕ Dodaj nowe zadanie"):
+        with st.form("new_task_form", clear_on_submit=True):
+            t_title = st.text_input("Tytuł zadania / krótkie polecenie *", placeholder="Np. Oddzwonić w sprawie reklamacji do sklepu X")
+            t_desc = st.text_area("Szczegóły / Opis zadania (opcjonalnie)", placeholder="Dodatkowe informacje...")
+            t_due = st.date_input("Termin realizacji", datetime.now())
+            submit_task = st.form_submit_button("💾 Zapisz zadanie")
+
+            if submit_task and t_title:
+                now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+                due_str = t_due.strftime("%Y-%m-%d")
+                initial_update = f"[{now_str}] Utworzono zadanie."
+                
+                c.execute(
+                    """
+                    INSERT INTO tasks (title, description, due_date, status, updates, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (t_title, t_desc if t_desc.strip() else None, due_str, "Do zrobienia", initial_update, now_str)
+                )
+                conn.commit()
+                st.success("Dodano nowe zadanie!")
+                st.rerun()
+
+    # Pobranie aktywnych zadań
+    df_tasks = pd.read_sql_query("SELECT * FROM tasks WHERE status != 'Zrobione' ORDER BY due_date ASC, id DESC", conn)
+
+    if not df_tasks.empty:
+        st.caption("Rozwiń zadanie, aby dopisać aktualizację lub je oznaczyć jako wykonane:")
+        for _, task_row in df_tasks.iterrows():
+            t_id = task_row["id"]
+            t_title_str = task_row["title"]
+            t_due_date = task_row["due_date"]
+            
+            with st.expander(f"📌 {t_title_str} (Termin: {t_due_date})"):
+                if task_row["description"]:
+                    st.markdown(f"**Opis:** {task_row['description']}")
+                
+                st.markdown("---")
+                st.markdown("**🔄 Historia / Aktualizacje:**")
+                if task_row["updates"]:
+                    for upd_line in task_row["updates"].split("\n"):
+                        if upd_line.strip():
+                            st.write(f"• {upd_line}")
+                else:
+                    st.caption("Brak wpisanych aktualizacji.")
+
+                st.markdown("---")
+                new_upd_text = st.text_input("Dopisz nową aktualizację co się wydarzyło:", key=f"upd_input_{t_id}", placeholder="Np. Klient prosił o telefon w poniedziałek")
+                
+                col_btn_upd, col_btn_done = st.columns(2)
+                with col_btn_upd:
+                    if st.button("➕ Dodaj aktualizację", key=f"btn_add_upd_{t_id}"):
+                        if new_upd_text.strip():
+                            now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+                            formatted_update = f"[{now_str}] {new_upd_text.strip()}"
+                            
+                            existing_updates = task_row["updates"] if task_row["updates"] else ""
+                            updated_history = f"{existing_updates}\n{formatted_update}".strip()
+                            
+                            c.execute("UPDATE tasks SET updates = ? WHERE id = ?", (updated_history, t_id))
+                            conn.commit()
+                            st.success("Dopisano aktualizację!")
+                            st.rerun()
+                        else:
+                            st.warning("Wpisz treść aktualizacji.")
+
+                with col_btn_done:
+                    if st.button("✅ Oznacz jako zrobione", key=f"btn_done_{t_id}", type="primary"):
+                        c.execute("DELETE FROM tasks WHERE id = ?", (t_id,))
+                        conn.commit()
+                        st.success("Zadanie ukończone i usunięte z listy!")
+                        st.rerun()
+    else:
+        st.info("Brak aktywnych zadań. Dodaj nowe za pomocą przycisku powyżej.")
+
+    # --- SEKCJA: ZŁOCI KLIENCI POSORTOWANI OD NAJDAWNIEJSZEJ WIZYTY ---
     st.markdown("---")
     st.subheader("🥇 Złoci Klienci (wymagający uwagi)")
     st.caption("Posortowani od klientów u których wizyta była najdawniej:")
@@ -543,7 +637,6 @@ with tab_home:
         today = pd.to_datetime("today")
         gold_df["Dni od wizyty"] = (today - gold_df["last_visit_clean"]).dt.days.fillna(999).astype(int)
         
-        # Sortowanie od największej liczby dni od wizyty (najdawniej) do najmniejszej (oraz nierozstrzygnięte na końcu)
         gold_df = gold_df.sort_values(by="Dni od wizyty", ascending=False)
 
         for _, g_row in gold_df.iterrows():
