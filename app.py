@@ -138,6 +138,20 @@ c.execute(
 """
 )
 
+# Tabela produktów
+c.execute(
+    """
+    CREATE TABLE IF NOT EXISTS products (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        category TEXT,
+        price REAL DEFAULT 0.0,
+        description TEXT,
+        image_url TEXT
+    )
+"""
+)
+
 # Tabela pozycji z raportu Excela
 c.execute(
     """
@@ -477,7 +491,7 @@ def render_client_card(row, key_prefix="card"):
 
                 st.markdown("---")
                 confirm_del_v = st.checkbox(f"Potwierdzam usunięcie wizyty z dnia {v_date_str}", key=f"{key_prefix}_conf_del_visit_{v_id}")
-                if st.button("🗑️ Usuń tę wizytę", key=f"{key_prefix}_del_visit_btn_{v_id}", type="primary"):
+                if st.button("🗑 Usuń tę wizytę", key=f"{key_prefix}_del_visit_btn_{v_id}", type="primary"):
                     if confirm_del_v:
                         c.execute("DELETE FROM visits WHERE id = ?", (v_id,))
                         
@@ -510,12 +524,13 @@ available_price_lists = (
 )
 
 # --- ZAKŁADKI ---
-tab_home, tab_new_visit, tab_visits, tab_clients, tab_excel, tab_new_client, tab_pl = st.tabs(
+tab_home, tab_new_visit, tab_visits, tab_clients, tab_products, tab_excel, tab_new_client, tab_pl = st.tabs(
     [
         "🏠 Strona główna",
         "➕ Nowa wizyta",
         "📋 Wizyty",
         "👥 Klienci",
+        "📦 Produkty",
         "📊 Raport Excel",
         "👤 Nowy klient",
         "🏷️ Cenniki",
@@ -546,7 +561,7 @@ with tab_home:
     else:
         st.info("Baza klientów jest pusta. Dodaj pierwszego klienta w zakładce 'Nowy klient'.")
 
-    # --- NOWA SEKCJA: NOTATKI / ZADANIA (TO-DO) ---
+    # --- SEKCJA: NOTATKI / ZADANIA (TO-DO) ---
     st.markdown("---")
     st.subheader("📌 Zadania i Notatki (To-Do)")
 
@@ -899,9 +914,6 @@ with tab_clients:
 
         st.markdown("---")
 
-        if "expanded_client_id" not in st.session_state:
-            st.session_state["expanded_client_id"] = None
-
         for _, row in filtered_df.iterrows():
             days_str = f"{row['Dni od wizyty']} dni" if row['Dni od wizyty'] != 999 else "Brak wizyt"
             color = (
@@ -912,18 +924,182 @@ with tab_clients:
             chain_str = f" [{row['chain_name']}]" if row.get("chain_name") else ""
             expander_title = f"{color} {row['name']}{chain_str} ({row['category']}) — {days_str}"
             
-            is_expanded = st.session_state["expanded_client_id"] == row["id"]
-            
-            with st.expander(expander_title, expanded=is_expanded):
-                if st.session_state["expanded_client_id"] != row["id"]:
-                    st.session_state["expanded_client_id"] = row["id"]
-                
+            with st.expander(expander_title):
                 render_client_card(row, key_prefix="list")
 
     else:
         st.info("Baza jest pusta. Dodaj pierwszego klienta.")
 
-# --- TAB 5: IMPORT EXCELA ---
+# --- TAB 5: PRODUKTY ---
+with tab_products:
+    st.subheader("📦 Katalog Produktów")
+    
+    prod_mode = st.radio(
+        "Wybierz tryb:",
+        ["Przeglądaj produkty", "Dodaj pojedynczy produkt", "📥 Masowy import z pliku Excel"],
+        horizontal=True,
+        key="prod_mode_radio"
+    )
+
+    if prod_mode == "Przeglądaj produkty":
+        df_products = pd.read_sql_query("SELECT * FROM products ORDER BY name ASC", conn)
+        
+        if not df_products.empty:
+            st.caption(f"Łącznie produktów w bazie: {len(df_products)}")
+            
+            search_prod = st.text_input("🔍 Szukaj produktu po nazwie:", placeholder="Wpisz nazwę...")
+            if search_prod.strip():
+                df_products = df_products[df_products["name"].str.contains(search_prod, case=False, na=False)]
+
+            for _, p_row in df_products.iterrows():
+                p_id = p_row["id"]
+                p_name = p_row["name"]
+                p_cat = p_row["category"] if p_row["category"] else "Ogólna"
+                p_price = p_row["price"] if p_row["price"] else 0.0
+                
+                with st.expander(f"🍞 {p_name} ({p_cat}) — {p_price:,.2f} zł"):
+                    col_p1, col_p2 = st.columns([2, 1])
+                    
+                    with col_p1:
+                        st.markdown(f"**Kategoria:** {p_cat}")
+                        st.markdown(f"**Cena bazowa:** {p_price:,.2f} zł")
+                        if p_row["description"]:
+                            st.markdown(f"**Opis:**\n{p_row['description']}")
+                        else:
+                            st.caption("Brak opisu produktu.")
+                    
+                    with col_p2:
+                        if p_row["image_url"]:
+                            try:
+                                st.image(p_row["image_url"], caption=p_name, use_container_width=True)
+                            except Exception:
+                                st.caption("Nie udało się załadować zdjęcia (błędny link/ścieżka).")
+                        else:
+                            st.caption("Brak zdjęcia")
+
+                    st.markdown("---")
+                    with st.popover("✏️ Edytuj / Usuń produkt", key=f"edit_prod_{p_id}"):
+                        with st.form(f"edit_prod_form_{p_id}"):
+                            ep_name = st.text_input("Nazwa produktu", value=p_name)
+                            ep_cat = st.text_input("Kategoria", value=p_row["category"] or "")
+                            ep_price = st.number_input("Cena (zł)", value=float(p_price), step=0.5)
+                            ep_desc = st.text_area("Opis", value=p_row["description"] or "")
+                            ep_img = st.text_input("Link / ścieżka do zdjęcia", value=p_row["image_url"] or "")
+                            
+                            save_p = st.form_submit_button("💾 Zapisz zmiany")
+                            if save_p:
+                                c.execute(
+                                    "UPDATE products SET name = ?, category = ?, price = ?, description = ?, image_url = ? WHERE id = ?",
+                                    (ep_name, ep_cat if ep_cat else None, ep_price, ep_desc if ep_desc else None, ep_img if ep_img else None, p_id)
+                                )
+                                conn.commit()
+                                st.success("Zaktualizowano produkt!")
+                                st.rerun()
+
+                        if st.button("🗑️ Usuń produkt", key=f"del_prod_{p_id}", type="primary"):
+                            c.execute("DELETE FROM products WHERE id = ?", (p_id,))
+                            conn.commit()
+                            st.success("Usunięto produkt!")
+                            st.rerun()
+        else:
+            st.info("Katalog produktów jest pusty. Dodaj produkty ręcznie lub zaimportuj je z pliku Excel.")
+
+    elif prod_mode == "Dodaj pojedynczy produkt":
+        with st.form("add_single_product_form", clear_on_submit=True):
+            p_name = st.text_input("Nazwa produktu *")
+            p_cat = st.text_input("Kategoria", placeholder="np. Pieczywo jasne, Ciastka, Bułki")
+            p_price = st.number_input("Cena (zł)", min_value=0.0, value=0.0, step=0.5)
+            p_desc = st.text_area("Opis produktu", placeholder="Skład, waga, cechy szczególne...")
+            p_img = st.text_input("Link lub ścieżka do zdjęcia", placeholder="https://... lub lokalna ścieżka")
+            
+            submitted_p = st.form_submit_button("💾 Dodaj produkt")
+            if submitted_p and p_name:
+                try:
+                    c.execute(
+                        "INSERT INTO products (name, category, price, description, image_url) VALUES (?, ?, ?, ?, ?)",
+                        (p_name, p_cat if p_cat else None, p_price, p_desc if p_desc else None, p_img if p_img else None)
+                    )
+                    conn.commit()
+                    st.success(f"Dodano produkt: {p_name}")
+                    st.rerun()
+                except sqlite3.IntegrityError:
+                    st.error("Produkt o takiej nazwie już istnieje w bazie!")
+
+    else:
+        st.markdown("#### 📥 Masowy import produktów z pliku Excel")
+        prod_file = st.file_uploader("Wybierz plik Excel z produktami (.xlsx lub .xls)", type=["xlsx", "xls"], key="excel_products_file")
+
+        if prod_file is not None:
+            try:
+                p_df = pd.read_excel(prod_file)
+                st.write("Podgląd wczytanego pliku:")
+                st.dataframe(p_df.head(5), use_container_width=True)
+
+                st.markdown("#### Mapowanie kolumn:")
+                p_cols = ["-- Brak / Nie przypisuj --"] + list(p_df.columns)
+
+                col_px, col_py = st.columns(2)
+                with col_px:
+                    map_name = st.selectbox("Nazwa produktu *", list(p_df.columns))
+                    map_cat = st.selectbox("Kategoria", p_cols)
+                    map_price = st.selectbox("Cena", p_cols)
+                with col_py:
+                    map_desc = st.selectbox("Opis", p_cols)
+                    map_img = st.selectbox("Link do zdjęcia", p_cols)
+
+                if st.button("🚀 Importuj produkty"):
+                    added_prod = 0
+                    updated_prod = 0
+
+                    for _, r in p_df.iterrows():
+                        prod_n = str(r[map_name]).strip()
+                        if not prod_n or prod_n == "nan":
+                            continue
+
+                        prod_c = str(r[map_cat]).strip() if map_cat != "-- Brak / Nie przypisuj --" and pd.notnull(r[map_cat]) else None
+                        
+                        try:
+                            prod_pr = float(r[map_price]) if map_price != "-- Brak / Nie przypisuj --" and pd.notnull(r[map_price]) else 0.0
+                        except Exception:
+                            prod_pr = 0.0
+
+                        prod_d = str(r[map_desc]).strip() if map_desc != "-- Brak / Nie przypisuj --" and pd.notnull(r[map_desc]) else None
+                        prod_i = str(r[map_img]).strip() if map_img != "-- Brak / Nie przypisuj --" and pd.notnull(r[map_img]) else None
+
+                        c.execute("SELECT COUNT(*) FROM products WHERE name = ?", (prod_n,))
+                        p_exists = c.fetchone()[0] > 0
+
+                        if p_exists:
+                            c.execute(
+                                """
+                                UPDATE products 
+                                SET category = COALESCE(?, category),
+                                    price = COALESCE(?, price),
+                                    description = COALESCE(?, description),
+                                    image_url = COALESCE(?, image_url)
+                                WHERE name = ?
+                                """,
+                                (prod_c, prod_pr, prod_d, prod_i, prod_n)
+                            )
+                            updated_prod += 1
+                        else:
+                            c.execute(
+                                """
+                                INSERT INTO products (name, category, price, description, image_url)
+                                VALUES (?, ?, ?, ?, ?)
+                                """,
+                                (prod_n, prod_c, prod_pr, prod_d, prod_i)
+                            )
+                            added_prod += 1
+
+                    conn.commit()
+                    st.success(f"Zaimportowano pomyślnie! Dodano nowych: {added_prod}, zaktualizowano istniejących: {updated_prod}")
+                    st.rerun()
+
+            except Exception as p_err:
+                st.error(f"Błąd podczas wczytywania pliku Excel: {p_err}")
+
+# --- TAB 6: IMPORT EXCELA ---
 with tab_excel:
     st.subheader("📊 Wczytaj raport ze sprzedaży z Excela")
 
@@ -1094,7 +1270,7 @@ with tab_excel:
         except Exception as e:
             st.error(f"Błąd podczas odczytu pliku Excel: {e}")
 
-# --- TAB 6: DODAJ NOWEGO KLIENTA ---
+# --- TAB 7: DODAJ NOWEGO KLIENTA ---
 with tab_new_client:
     st.subheader("👤 Zgłaszanie nowych klientów")
 
@@ -1230,7 +1406,7 @@ with tab_new_client:
             except Exception as ex:
                 st.error(f"Błąd podczas odczytu pliku: {ex}")
 
-# --- TAB 7: ZARZĄDZANIE CENNIKAMI ---
+# --- TAB 8: ZARZĄDZANIE CENNIKAMI ---
 with tab_pl:
     st.subheader("🏷️ Przegląd i dodawanie cenników")
 
