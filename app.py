@@ -478,7 +478,7 @@ with tab2:
                             send_email_via_gmail(
                                 sender_email="jacek.lapot@gmail.com",
                                 app_password=app_pass,
-                                recipient_email="piekarnia.zamowienia@spolemkielce.pl",
+                                recipient_email="jacek.lapot@gmail.com",
                                 subject=subject,
                                 body_text=body,
                             )
