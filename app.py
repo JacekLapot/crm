@@ -11,8 +11,8 @@ PIN_CRM = "1136"  # <-- ZMIEŃ TO HASŁO NA SWÓJ PRYWATNY PIN / KOD
 
 # --- KONFIGURACJA STRONY POD TELEFON ---
 st.set_page_config(
-    page_title="CRM Wizyty, Zamówienia i Dane",
-    page_icon="📱",
+    page_title="Chlebownik",
+    page_icon="🍞",
     layout="centered",
 )
 
