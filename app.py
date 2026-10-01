@@ -467,12 +467,21 @@ with tab2:
                     else:
                         subject = f"Zamówienie: {selected_client} - {visit_date_str}"
                         body = (
-                            f"Zamówienie złożone dla klienta: {selected_client}\n"
-                            f"Data wizyty/zamówienia: {visit_date_str}\n"
-                            f"Przedstawiciel: jacek.lapot@gmail.com\n\n"
-                            f"--- TREŚĆ ZAMÓWIENIA ---\n"
+                            f"Hej,
+                            f
+                            f"proszę o wprowadzenie jak poniżej:
+                            f" "
+                            f"{selected_client}\n:"
+                            f" "
                             f"{order_text}\n\n"
-                            f"Wysłano z aplikacji CRM."
+                            f" "
+                            f" "
+                            f"Dziękuję :)"
+                            f" "
+                            f" "
+                            f" "                    
+                            f"Pozdrawiam"                    
+                            f"Jacek Łapot"
                         )
                         try:
                             send_email_via_gmail(
