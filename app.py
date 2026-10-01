@@ -159,7 +159,7 @@ c.execute(
 """
 )
 
-# Tabela zamówień (zachowana dla zgodności)
+# Tabela zamówień
 c.execute(
     """
     CREATE TABLE IF NOT EXISTS orders (
@@ -222,6 +222,195 @@ def send_email_via_gmail(
         server.send_message(msg)
 
 
+def render_client_card(row, key_prefix="card"):
+    """Pomocnicza funkcja renderująca pełną kartotekę klienta"""
+    today = pd.to_datetime("today")
+    last_v_dt = pd.to_datetime(row["last_visit"], errors="coerce")
+    days_from_visit = (today - last_v_dt).days if pd.notnull(last_v_dt) else 999
+    days_str = f"{days_from_visit} dni temu" if days_from_visit != 999 else "Brak wizyt"
+    
+    color = (
+        "⚪" if days_from_visit == 999 else
+        ("🔴" if days_from_visit > 30 else ("🟡" if days_from_visit > 14 else "🟢"))
+    )
+
+    chain_str = f" [{row['chain_name']}]" if row.get("chain_name") else ""
+    st.markdown(f"### {color} {row['name']}{chain_str} ({row['category']})")
+    st.caption(f"Ostatnia wizyta: {row['last_visit'] if row['last_visit'] else 'Brak'} ({days_str})")
+
+    # Dane kontaktowe
+    st.markdown("📞 **Dane kontaktowe:**")
+    if row.get("chain_name"):
+        st.write(f"• **Nazwa sieci:** {row['chain_name']}")
+    if row["phone"]:
+        st.write(f"• **Telefon:** [{row['phone']}](tel:{row['phone']})")
+    if row["email"]:
+        st.write(f"• **E-mail:** [{row['email']}](mailto:{row['email']})")
+    if row["address"]:
+        st.write(f"• **Adres:** {row['address']}")
+    if not any([row.get("chain_name"), row["phone"], row["email"], row["address"]]):
+        st.caption("Brak danych kontaktowych")
+
+    st.write(f"**Przypisany cennik:** 🏷️ `{row['price_list'] if row['price_list'] else 'Brak'}`")
+
+    if row["price_list"] and row["price_list"] != "Brak":
+        c.execute("SELECT details FROM price_lists WHERE title = ?", (row["price_list"],))
+        pl_res = c.fetchone()
+        if pl_res:
+            with st.popover("👁️ Pokaż cennik", key=f"{key_prefix}_pl_{row['id']}"):
+                st.caption(f"Cennik: {row['price_list']}")
+                st.text(pl_res[0])
+
+    # SEKCJA EDYCYJNA I USUWANIE
+    with st.popover("✏️ Edytuj / Usuń klienta", key=f"{key_prefix}_edit_{row['id']}"):
+        st.markdown(f"#### Edycja: {row['name']}")
+        with st.form(key=f"{key_prefix}_edit_form_{row['id']}"):
+            new_name = st.text_input("Nazwa klienta", value=row["name"])
+            new_chain = st.text_input("Nazwa sieci", value=row.get("chain_name") or "")
+
+            cat_options = ["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"]
+            cat_idx = cat_options.index(row["category"]) if row["category"] in cat_options else 0
+            new_cat = st.selectbox("Priorytet", cat_options, index=cat_idx)
+
+            new_phone = st.text_input("Telefon", value=row["phone"] or "")
+            new_email = st.text_input("E-mail", value=row["email"] or "")
+            new_address = st.text_input("Adres", value=row["address"] or "")
+
+            current_pl = row["price_list"] if row["price_list"] in available_price_lists else "Brak"
+            pl_idx = available_price_lists.index(current_pl) if current_pl in available_price_lists else 0
+            new_pl = st.selectbox("Cennik", available_price_lists, index=pl_idx)
+
+            save_changes = st.form_submit_button("💾 Zapisz zmiany")
+
+            if save_changes:
+                try:
+                    if new_name != row["name"]:
+                        c.execute("UPDATE purchases SET client_name = ? WHERE client_name = ?", (new_name, row["name"]))
+                        c.execute("UPDATE visits SET client_name = ? WHERE client_name = ?", (new_name, row["name"]))
+                        c.execute("UPDATE orders SET client_name = ? WHERE client_name = ?", (new_name, row["name"]))
+
+                    c.execute(
+                        """
+                        UPDATE clients 
+                        SET name = ?, category = ?, chain_name = ?, phone = ?, email = ?, address = ?, price_list = ?
+                        WHERE id = ?
+                        """,
+                        (new_name, new_cat, new_chain, new_phone, new_email, new_address, new_pl if new_pl != "Brak" else None, row["id"])
+                    )
+                    conn.commit()
+                    st.success("Pomyślnie zaktualizowano dane klienta!")
+                    st.rerun()
+                except sqlite3.IntegrityError:
+                    st.error("Klient o takiej nazwie już istnieje!")
+
+        st.markdown("---")
+        st.markdown("🚨 **Usuwanie kartoteki:**")
+        confirm_delete = st.checkbox(f"Potwierdzam chęć usunięcia klienta {row['name']}", key=f"{key_prefix}_confirm_del_{row['id']}")
+        if st.button("🗑️ Usuń kartotekę klienta", key=f"{key_prefix}_del_btn_{row['id']}", type="primary"):
+            if confirm_delete:
+                c.execute("DELETE FROM clients WHERE id = ?", (row["id"],))
+                c.execute("DELETE FROM purchases WHERE client_name = ?", (row["name"],))
+                c.execute("DELETE FROM visits WHERE client_name = ?", (row["name"],))
+                c.execute("DELETE FROM orders WHERE client_name = ?", (row["name"],))
+                conn.commit()
+                st.success(f"Usunięto kartotekę klienta: {row['name']}")
+                st.rerun()
+            else:
+                st.warning("Zaznacz pole potwierdzenia, aby usunąć klienta.")
+
+    st.markdown("---")
+    st.markdown("📈 **Statystyki zakupy/zwroty:**")
+
+    period_choice = st.selectbox(
+        "📅 Wybierz okres raportu:",
+        ["Wszystko", "Ostatni 1 dzień", "Ostatni tydzień (7 dni)", "Ostatni miesiąc (30 dni)"],
+        key=f"{key_prefix}_period_{row['id']}"
+    )
+
+    query_p = "SELECT * FROM purchases WHERE client_name = ?"
+    params_p = [row["name"]]
+
+    if period_choice == "Ostatni 1 dzień":
+        date_limit = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        query_p += " AND (report_end_date >= ? OR report_date >= ?)"
+        params_p.extend([date_limit, date_limit])
+    elif period_choice == "Ostatni tydzień (7 dni)":
+        date_limit = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        query_p += " AND (report_end_date >= ? OR report_date >= ?)"
+        params_p.extend([date_limit, date_limit])
+    elif period_choice == "Ostatni miesiąc (30 dni)":
+        date_limit = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+        query_p += " AND (report_end_date >= ? OR report_date >= ?)"
+        params_p.extend([date_limit, date_limit])
+
+    df_client_purchases = pd.read_sql_query(query_p, conn, params=params_p)
+
+    if not df_client_purchases.empty:
+        bought_val = df_client_purchases["bought_val"].sum()
+        returned_val = df_client_purchases["returned_val"].sum()
+        net_val = bought_val - returned_val
+        ret_rate = (returned_val / bought_val * 100) if bought_val > 0 else 0.0
+
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.metric("Wartość dostawy (Netto)", f"{net_val:,.2f} zł")
+            st.metric("Zakupy ogółem", f"{bought_val:,.2f} zł")
+        with col_b:
+            st.metric("% Zwrotów", f"{ret_rate:.1f}%")
+            st.metric("Zwroty ogółem", f"{returned_val:,.2f} zł")
+
+        df_items_display = df_client_purchases.groupby("item_name").agg({
+            "bought_qty": "sum",
+            "bought_val": "sum",
+            "returned_qty": "sum",
+            "returned_val": "sum",
+            "net_val": "sum"
+        }).reset_index().rename(columns={
+            "item_name": "Produkt",
+            "bought_qty": "Zakup_Ilość",
+            "bought_val": "Zakup_Kwota",
+            "returned_qty": "Zwrot_Ilość",
+            "returned_val": "Zwrot_Kwota",
+            "net_val": "Wartość_Netto"
+        })
+
+        with st.popover("📦 Pokaż zakupiony asortyment", key=f"{key_prefix}_asort_{row['id']}"):
+            st.dataframe(df_items_display, use_container_width=True)
+    else:
+        st.caption("Brak danych o zakupach/zwrotach dla wybranego okresu.")
+
+    # HISTORIA WIZYT
+    st.markdown("---")
+    st.markdown("🗓️ **Historia wizyt i zamówień:**")
+
+    df_visits = pd.read_sql_query(
+        "SELECT visit_date, notes, order_details, created_at FROM visits WHERE client_name = ? ORDER BY id DESC",
+        conn,
+        params=(row["name"],),
+    )
+
+    if not df_visits.empty:
+        for v_idx, v_row in df_visits.iterrows():
+            v_date_str = v_row["visit_date"]
+            with st.expander(f"📍 Wizyta: {v_date_str}"):
+                if v_row["notes"]:
+                    st.markdown("**📝 Uwagi:**")
+                    st.write(v_row["notes"])
+                else:
+                    st.caption("Brak uwag z tej wizyty.")
+
+                if v_row["order_details"]:
+                    st.markdown("**🛒 Zamówienie:**")
+                    st.code(v_row["order_details"], language="text")
+                else:
+                    st.caption("Brak złożonego zamówienia podczas tej wizyty.")
+                
+                if v_row["created_at"]:
+                    st.caption(f"Zapisano: {v_row['created_at']}")
+    else:
+        st.caption("Brak zarejestrowanych wizyt dla tego klienta.")
+
+
 st.title("📱 Mobilny CRM")
 
 # Przycisk wylogowania w panelu bocznym
@@ -231,9 +420,16 @@ with st.sidebar:
         st.session_state["authenticated"] = False
         st.rerun()
 
+# Pobranie listy cenników
+price_lists_df = pd.read_sql_query("SELECT title FROM price_lists", conn)
+available_price_lists = (
+    ["Brak"] + price_lists_df["title"].tolist() if not price_lists_df.empty else ["Brak"]
+)
+
 # --- ZAKŁADKI ---
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
+tab_home, tab1, tab2, tab3, tab4, tab5 = st.tabs(
     [
+        "🏠 Strona główna",
         "📋 Klienci",
         "➕ Nowa wizyta",
         "📊 Raport Excel",
@@ -242,11 +438,29 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(
     ]
 )
 
-# Pobranie listy cenników
-price_lists_df = pd.read_sql_query("SELECT title FROM price_lists", conn)
-available_price_lists = (
-    ["Brak"] + price_lists_df["title"].tolist() if not price_lists_df.empty else ["Brak"]
-)
+# --- TAB HOME: STRONA GŁÓWNA Z WYSZUKIWARKĄ ---
+with tab_home:
+    st.subheader("🔍 Wyszukaj Klienta")
+    
+    all_clients_df = pd.read_sql_query("SELECT * FROM clients ORDER BY name ASC", conn)
+    
+    if not all_clients_df.empty:
+        client_names = ["-- Wybierz lub wpisz nazwę klienta --"] + all_clients_df["name"].tolist()
+        search_selection = st.selectbox(
+            "Wpisz lub wybierz klienta z listy:",
+            client_names,
+            index=0
+        )
+        
+        st.markdown("---")
+        
+        if search_selection != "-- Wybierz lub wpisz nazwę klienta --":
+            selected_row = all_clients_df[all_clients_df["name"] == search_selection].iloc[0]
+            render_client_card(selected_row, key_prefix="home")
+        else:
+            st.info("💡 Wpisz nazwę klienta w polu powyżej, aby wywołać jego kartotekę.")
+    else:
+        st.info("Baza klientów jest pusta. Dodaj pierwszego klienta w zakładce 'Nowy klient'.")
 
 # --- TAB 1: LISTA KLIENTÓW ---
 with tab1:
@@ -297,183 +511,7 @@ with tab1:
             with st.expander(
                 f"{color} {row['name']}{chain_str} ({row['category']}) — {days_str}"
             ):
-                # Dane kontaktowe
-                st.markdown("📞 **Dane kontaktowe:**")
-                if row.get("chain_name"):
-                    st.write(f"• **Nazwa sieci:** {row['chain_name']}")
-                if row["phone"]:
-                    st.write(f"• **Telefon:** [{row['phone']}](tel:{row['phone']})")
-                if row["email"]:
-                    st.write(f"• **E-mail:** [{row['email']}](mailto:{row['email']})")
-                if row["address"]:
-                    st.write(f"• **Adres:** {row['address']}")
-                if not any([row.get("chain_name"), row["phone"], row["email"], row["address"]]):
-                    st.caption("Brak danych kontaktowych")
-
-                st.write(f"**Ostatnia wizyta:** {row['last_visit'] if row['last_visit'] else 'Brak wpisanej wizyty'}")
-                st.write(
-                    f"**Przypisany cennik:** 🏷️ `{row['price_list'] if row['price_list'] else 'Brak'}`"
-                )
-
-                if row["price_list"] and row["price_list"] != "Brak":
-                    c.execute(
-                        "SELECT details FROM price_lists WHERE title = ?",
-                        (row["price_list"],),
-                    )
-                    pl_res = c.fetchone()
-                    if pl_res:
-                        with st.popover("👁️ Pokaż cennik"):
-                            st.caption(f"Cennik: {row['price_list']}")
-                            st.text(pl_res[0])
-
-                # --- SEKCJA EDYCYJNA ORAZ USUWANIA ---
-                with st.popover("✏️ Edytuj / Usuń klienta"):
-                    st.markdown(f"#### Edycja: {row['name']}")
-                    with st.form(key=f"edit_form_{row['id']}"):
-                        new_name = st.text_input("Nazwa klienta", value=row["name"])
-                        new_chain = st.text_input("Nazwa sieci", value=row.get("chain_name") or "")
-
-                        cat_options = ["🥇 Złoty", "🥈 Srebrny", "🥉 Brązowy"]
-                        cat_idx = cat_options.index(row["category"]) if row["category"] in cat_options else 0
-                        new_cat = st.selectbox("Priorytet", cat_options, index=cat_idx)
-
-                        new_phone = st.text_input("Telefon", value=row["phone"] or "")
-                        new_email = st.text_input("E-mail", value=row["email"] or "")
-                        new_address = st.text_input("Adres", value=row["address"] or "")
-
-                        current_pl = row["price_list"] if row["price_list"] in available_price_lists else "Brak"
-                        pl_idx = available_price_lists.index(current_pl) if current_pl in available_price_lists else 0
-                        new_pl = st.selectbox("Cennik", available_price_lists, index=pl_idx)
-
-                        save_changes = st.form_submit_button("💾 Zapisz zmiany")
-
-                        if save_changes:
-                            try:
-                                if new_name != row["name"]:
-                                    c.execute("UPDATE purchases SET client_name = ? WHERE client_name = ?", (new_name, row["name"]))
-                                    c.execute("UPDATE visits SET client_name = ? WHERE client_name = ?", (new_name, row["name"]))
-                                    c.execute("UPDATE orders SET client_name = ? WHERE client_name = ?", (new_name, row["name"]))
-
-                                c.execute(
-                                    """
-                                    UPDATE clients 
-                                    SET name = ?, category = ?, chain_name = ?, phone = ?, email = ?, address = ?, price_list = ?
-                                    WHERE id = ?
-                                    """,
-                                    (new_name, new_cat, new_chain, new_phone, new_email, new_address, new_pl if new_pl != "Brak" else None, row["id"])
-                                )
-                                conn.commit()
-                                st.success("Pomyślnie zaktualizowano dane klienta!")
-                                st.rerun()
-                            except sqlite3.IntegrityError:
-                                st.error("Klient o takiej nazwie już istnieje!")
-
-                    st.markdown("---")
-                    st.markdown("🚨 **Usuwanie kartoteki:**")
-                    confirm_delete = st.checkbox(f"Potwierdzam chęć usunięcia klienta {row['name']}", key=f"confirm_del_{row['id']}")
-                    if st.button("🗑️ Usuń kartotekę klienta", key=f"delete_btn_{row['id']}", type="primary"):
-                        if confirm_delete:
-                            c.execute("DELETE FROM clients WHERE id = ?", (row["id"],))
-                            c.execute("DELETE FROM purchases WHERE client_name = ?", (row["name"],))
-                            c.execute("DELETE FROM visits WHERE client_name = ?", (row["name"],))
-                            c.execute("DELETE FROM orders WHERE client_name = ?", (row["name"],))
-                            conn.commit()
-                            st.success(f"Usunięto kartotekę klienta: {row['name']}")
-                            st.rerun()
-                        else:
-                            st.warning("Zaznacz pole potwierdzenia, aby usunąć klienta.")
-
-                st.markdown("---")
-                st.markdown("📈 **Statystyki zakupy/zwroty:**")
-
-                period_choice = st.selectbox(
-                    "📅 Wybierz okres raportu:",
-                    ["Wszystko", "Ostatni 1 dzień", "Ostatni tydzień (7 dni)", "Ostatni miesiąc (30 dni)"],
-                    key=f"period_sel_{row['id']}"
-                )
-
-                query_p = "SELECT * FROM purchases WHERE client_name = ?"
-                params_p = [row["name"]]
-
-                if period_choice == "Ostatni 1 dzień":
-                    date_limit = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-                    query_p += " AND (report_end_date >= ? OR report_date >= ?)"
-                    params_p.extend([date_limit, date_limit])
-                elif period_choice == "Ostatni tydzień (7 dni)":
-                    date_limit = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-                    query_p += " AND (report_end_date >= ? OR report_date >= ?)"
-                    params_p.extend([date_limit, date_limit])
-                elif period_choice == "Ostatni miesiąc (30 dni)":
-                    date_limit = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
-                    query_p += " AND (report_end_date >= ? OR report_date >= ?)"
-                    params_p.extend([date_limit, date_limit])
-
-                df_client_purchases = pd.read_sql_query(query_p, conn, params=params_p)
-
-                if not df_client_purchases.empty:
-                    bought_val = df_client_purchases["bought_val"].sum()
-                    returned_val = df_client_purchases["returned_val"].sum()
-                    net_val = bought_val - returned_val
-                    ret_rate = (returned_val / bought_val * 100) if bought_val > 0 else 0.0
-
-                    col_a, col_b = st.columns(2)
-                    with col_a:
-                        st.metric("Wartość dostawy (Netto)", f"{net_val:,.2f} zł")
-                        st.metric("Zakupy ogółem", f"{bought_val:,.2f} zł")
-                    with col_b:
-                        st.metric("% Zwrotów", f"{ret_rate:.1f}%")
-                        st.metric("Zwroty ogółem", f"{returned_val:,.2f} zł")
-
-                    df_items_display = df_client_purchases.groupby("item_name").agg({
-                        "bought_qty": "sum",
-                        "bought_val": "sum",
-                        "returned_qty": "sum",
-                        "returned_val": "sum",
-                        "net_val": "sum"
-                    }).reset_index().rename(columns={
-                        "item_name": "Produkt",
-                        "bought_qty": "Zakup_Ilość",
-                        "bought_val": "Zakup_Kwota",
-                        "returned_qty": "Zwrot_Ilość",
-                        "returned_val": "Zwrot_Kwota",
-                        "net_val": "Wartość_Netto"
-                    })
-
-                    with st.popover("📦 Pokaż zakupiony asortyment"):
-                        st.dataframe(df_items_display, use_container_width=True)
-                else:
-                    st.caption("Brak danych o zakupach/zwrotach dla wybranego okresu.")
-
-                # --- SEKCJA HISTORII WIZYT I ZAMÓWIEŃ ---
-                st.markdown("---")
-                st.markdown("🗓️ **Historia wizyt i zamówień:**")
-
-                df_visits = pd.read_sql_query(
-                    "SELECT visit_date, notes, order_details, created_at FROM visits WHERE client_name = ? ORDER BY id DESC",
-                    conn,
-                    params=(row["name"],),
-                )
-
-                if not df_visits.empty:
-                    for _, v_row in df_visits.iterrows():
-                        v_date_str = v_row["visit_date"]
-                        with st.expander(f"📍 Wizyta: {v_date_str}"):
-                            if v_row["notes"]:
-                                st.markdown("**📝 Uwagi:**")
-                                st.write(v_row["notes"])
-                            else:
-                                st.caption("Brak uwag z tej wizyty.")
-
-                            if v_row["order_details"]:
-                                st.markdown("**🛒 Zamówienie:**")
-                                st.code(v_row["order_details"], language="text")
-                            else:
-                                st.caption("Brak złożonego zamówienia podczas tej wizyty.")
-                            
-                            if v_row["created_at"]:
-                                st.caption(f"Zapisano: {v_row['created_at']}")
-                else:
-                    st.caption("Brak zarejestrowanych wizyt dla tego klienta.")
+                render_client_card(row, key_prefix="list")
 
     else:
         st.info("Baza jest pusta. Dodaj pierwszego klienta.")
@@ -879,7 +917,7 @@ with tab4:
                             added_cnt += 1
 
                     conn.commit()
-                    st.success(f"Gotowe! Dodano {added_cnt} nowych kartotek, zaktualizowano {updated_cnt} istniejących.")
+                    st.success(f"Gotowe! Dodano {added_cnt} nowych kartotek, zaktualizowano {updated_cnt} iściejących.")
                     st.rerun()
 
             except Exception as ex:
