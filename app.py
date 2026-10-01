@@ -15,6 +15,23 @@ st.set_page_config(
     page_title="Chlebownik",
     page_icon="🍞",
     layout="centered",
+    initial_sidebar_state="collapsed",
+)
+
+# --- CUSTOM HEADER DLA APLIKACJI MOBILNEJ (PWA / EKRAN GŁÓWNY) ---
+st.markdown(
+    """
+    <head>
+        <title>Chlebownik</title>
+        <meta name="apple-mobile-web-app-title" content="Chlebownik">
+        <meta name="application-name" content="Chlebownik">
+        <meta name="apple-mobile-web-app-capable" content="yes">
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+        <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍞</text></svg>">
+        <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍞</text></svg>">
+    </head>
+    """,
+    unsafe_allow_html=True,
 )
 
 # --- MECHANIZM LOGOWANIA ---
@@ -172,7 +189,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(
         "➕ Nowa wizyta",
         "📊 Raport Excel",
         "👤 Nowy klient",
-        "🏷️️ Cenniki",
+        "🏷️ Cenniki",
     ]
 )
 
@@ -318,7 +335,6 @@ with tab1:
                 st.markdown("---")
                 st.markdown("📈 **Statystyki zakupy/zwroty:**")
 
-                # WYBÓR OKRESU RAPORTOWANIA DLA KARTOTEKI
                 period_choice = st.selectbox(
                     "📅 Wybierz okres raportu:",
                     ["Wszystko", "Ostatni 1 dzień", "Ostatni tydzień (7 dni)", "Ostatni miesiąc (30 dni)"],
@@ -465,21 +481,20 @@ with tab2:
                             "Notatki zapisano, ale zamówienie NIE zostało wysłane – brak Hasła Aplikacji Gmail!"
                         )
                     else:
-                        subject = f"Zamówienie: {selected_client}"
+                        subject = f"Zamówienie: {selected_client} - {visit_date_str}"
                         body = (
-                            f"Hej,\n"
-                            f"proszę o wprowadzenie jak poniżej:\n\n"
-                            f"{selected_client}\n"
-                            f"{order_text}\n\n\n"
-                            f"Dziękuję :)\n\n\n\n"                 
-                            f"Pozdrawiam\n"                    
-                            f"Jacek Łapot"
+                            f"Zamówienie złożone dla klienta: {selected_client}\n"
+                            f"Data wizyty/zamówienia: {visit_date_str}\n"
+                            f"Przedstawiciel: jacek.lapot@gmail.com\n\n"
+                            f"--- TREŚĆ ZAMÓWIENIA ---\n"
+                            f"{order_text}\n\n"
+                            f"Wysłano z aplikacji CRM."
                         )
                         try:
                             send_email_via_gmail(
                                 sender_email="jacek.lapot@gmail.com",
                                 app_password=app_pass,
-                                recipient_email="jacek.lapot@gmail.com",
+                                recipient_email="piekarnia.zamowienia@spolemkielce.pl",
                                 subject=subject,
                                 body_text=body,
                             )
@@ -815,7 +830,7 @@ with tab4:
                             added_cnt += 1
 
                     conn.commit()
-                    st.success(f"Gotowe! Dodano {added_cnt} nowych kartotek, zaktualizowano {updated_cnt} istniejących.")
+                    st.success(f"Gotowe! Dodano {added_cnt} nowych kartotek, zaktualizowano {updated_cnt} iściejących.")
                     st.rerun()
 
             except Exception as ex:
